@@ -4,7 +4,7 @@ A Chatbot-Arena-style leaderboard for **agents** instead of models — plus a ba
 
 Chatbot Arena answers "which model is better?" But in practice nobody ships a bare model. They ship a *harness*: a model wired to a set of tools, with a prompt that says how and when to use them. Two harnesses over the same model can be far apart in quality. RSI Arena measures that whole package, and then closes the loop — the winners get mutated into the next generation of contenders.
 
-RSI stands for *recursive self-improvement*: the agents in the arena are optimized by LLMs, using preference data produced by humans judging those same agents.
+RSI stands for *recursive self-improvement* — see [below](#why-rsi) for what that means here.
 
 ## What's being compared
 
@@ -52,6 +52,33 @@ The next batch of user questions is the evaluation for that generation. Repeat.
                     │                     ▼
               new agents ◀── LLM optimizer over top-K
 ```
+
+## Why RSI
+
+Because nobody writes the agents. We supply the primitives; the agents do the rest.
+
+A normal agent framework works like this: a human reads the traces, notices the search step fires too early, rewrites the prompt, reorders the pipeline, ships it, repeats. The human is the optimizer, and the whole system improves exactly as fast as that human can read transcripts.
+
+RSI Arena removes the human from that inner loop. What we contribute is fixed and small:
+
+- the **primitives** — the raw capabilities an agent may call (`search`, `scrape`, `summarize`, …)
+- the **arena** — a way to run two agents on the same question and record which one won
+
+That's it. Nobody hand-writes an orchestration prompt. Nobody decides that `rewrite_query` should come before `search`. Nobody tunes a loop budget. Those are all *discovered*, by the agents, out of the primitive set they were handed.
+
+The recursion is the part that makes it more than plain search. The optimizer is not a separate fixed system sitting outside the arena — it's the same population of LLMs that competes in it:
+
+- Generation *N+1* is **authored by generation *N***. The winners are handed their own traces, their own losses, and their rivals' answers, and asked to write the next harness.
+- As the models improve, so does the optimizer, so the harnesses improve faster.
+- As the harnesses improve, the bar for winning a battle rises, so the next round of rewrites is judged against stronger opposition.
+
+Each turn of the loop improves the thing that runs the next turn. That's the recursive part: not a model training itself on its own weights, but a population of agents rewriting the code that makes them agents, evaluated by whether the rewrite actually won.
+
+**Where the recursion stops.** Being precise about the bounds, since "self-improving" is an easy word to oversell:
+
+- Model weights never change. The search is over harnesses — prompts, primitive selection, ordering, loop budgets — not parameters.
+- The primitive set is human-supplied. An agent can discover a better *way* to use `scrape`; it cannot invent a primitive it wasn't given. (Letting agents propose new primitives is the obvious next step, and the obvious next safety question.)
+- Humans still supply the fitness signal, one vote at a time. The system optimizes toward what arena users prefer — which means it inherits their taste, and their biases, exactly.
 
 ## Why this might work
 
