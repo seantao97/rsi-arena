@@ -14,13 +14,34 @@ harness — the primitive sets barely overlap, and neither do the leaderboards.
 
 ## Catalogue
 
-| Topic | Output | Settles? | Notes |
+| Topic | Output | Truth | Notes |
 |---|---|---|---|
-| [Event markets](event-markets.md) | Decision memo | Yes, at market close | The general case. Start here — the other market topics are specialisations of it. |
-| [Earnings](earnings.md) | Pre-print memo | Yes, next morning | Beat/miss plus one-day move direction and magnitude. |
-| [Sports](sports.md) | Pre-game memo | Yes, hours later | Full scoreline distribution, not just a winner. |
-| [Weather](weather.md) | Forecast memo | Yes, next day | Densest feedback of any topic; the natural place to debug the arena itself. |
-| [Essays](essays.md) | Essay | Never | Pure preference. No settlement anywhere, which makes it the cleanest test of the arena's premise. |
+| [Event markets](event-markets.md) | Decision memo | Settles | The general case. The other market topics specialise it. |
+| [Earnings](earnings.md) | Pre-print memo | Settles | Beat/miss plus one-day move, priced against the implied move. |
+| [Index options](index-options.md) | Trade plan | Settles | NDX, 0DTE to weekly. Fastest-settling market topic. |
+| [ETF allocation](etf-allocation.md) | Target weights | Settles | Weekly rebalance, net of cost. |
+| [Sports](sports.md) | Pre-game memo | Settles | Scoreline distributions, not moneyline. |
+| [Weather](weather.md) | Forecast memo | Settles | Daily settlement. The instrument for debugging the arena. |
+| [Essays](essays.md) | Essay | None | Never settles. The cleanest test of a pure-preference loop. |
+| [Poker](poker.md) | Action + analysis | **Verifiable** | Solver gives EV. A test harness, not a leaderboard. |
+| [Bridge](bridge.md) | Call/card + analysis | **Part verifiable** | Play is double-dummy checkable; bidding is not. |
+
+## Three kinds of truth
+
+The distinction drives what each topic is *for*.
+
+**Verifiable** — a scorer exists at answer time. Poker, and the play half of bridge. Normally this
+disqualifies a topic, since you should just use the scorer. They are here as instruments: because
+correctness is computable, they are the only place you can measure whether reader preference actually
+tracks being right. Run them, compare preference against the scorer, and you learn something about
+every other topic. Keep them off the public leaderboard.
+
+**Settles** — no scorer now, but the world answers later. Every market topic and weather. Outcomes are
+recorded and given to agents as memory so they can calibrate, and are never a rating input. This is
+where the audit lives: months later, did readers prefer the memos that turned out right?
+
+**None** — essays. Nothing ever resolves. If the loop works here it works, and if it degenerates into
+longer and more confident writing, that shows up here first with no settlement data to hide behind.
 
 ## What every topic inherits
 
@@ -74,17 +95,6 @@ second two are what make it worth the engineering.
 4. **Some fragment settles later.** Not required, but it is the only way to check whether preference
    tracked quality rather than persuasion.
 
-### Candidates worth considering
-
-| Candidate | Why it fits |
-|---|---|
-| **Dataset analysis** — "here is a CSV, what is the story?" | The strongest harness leverage of anything on this list, because `run_code` does the real work. Whether an analysis is *sound* is checkable by an expert; what the story *is* has no scorer. |
-| **Code review** — a diff, and what is wrong with it | Sits squarely in the checkable band: a claimed bug either reproduces or does not, so votes can be audited against something. Heavy retrieval and reasoning scaffolding. |
-| **Contract redline** — what is wrong with this, for my side | Never settles, high expertise, enormous generation-verification gap. Lawyers agree with each other far more than laypeople expect. |
-| **Literature triage** — what does the evidence actually say | Judge agreement is high among clinicians and researchers; the failure mode is confident synthesis of a thin base, which is exactly what an arena can measure. Avoid diagnosis. |
-| **Flight delay / operational forecasting** | Settles in hours with enormous volume. Less interesting as a product than as instrumentation — the cheapest place to debug rating, pairing and voter weighting before pointing them at something slow. |
-| **Election forecasting** | Granular targets (seat counts, margins) where published models are public and beatable, and a long settlement horizon that tests whether the arena survives slow feedback. |
-
-Weather deserves a note here too: it settles daily against an authoritative source, needs no
-subjective judgment for the settleable part, and has free archived model data going back decades.
-If a mechanism in the arena is suspect, weather is where to test it.
+Weather is the exception worth building early regardless of interest: it settles daily against an
+authoritative source, needs no subjective judgment for the settleable part, and has free archived model
+data going back decades. If a mechanism in the arena is suspect, weather is where to test it.
