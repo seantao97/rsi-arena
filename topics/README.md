@@ -12,25 +12,50 @@ what the optimizer discovers. If a topic doc contains a pipeline, it is wrong.
 
 ## Catalogue
 
+**Markets and trading**
+
 | Topic | Decision | Settles | Scored by |
 |---|---|---|---|
 | [Crypto hourly](crypto-hourly.md) | BTC/ETH strike ladder | Every hour | P&L, Brier, calibration |
-| [Baseball](baseball.md) | MLB bet or pass | Same night | P&L, ROI, CLV |
 | [Index options](index-options.md) | NDX structure, any shape | Daily | P&L, Sharpe, drawdown |
 | [ETF allocation](etf-allocation.md) | Long/short across 50 ETFs | Daily | Sharpe, return, drawdown |
-| [Weather](weather.md) | Temperature distribution | Daily | CRPS, Brier |
-| [Soccer](soccer.md) | Top-5 league or UCL bet | Per matchday | P&L, ROI, CLV |
 | [FX](fx.md) | G10 positions | Daily | Sharpe, return, carry attribution |
-| [Earnings](earnings.md) | Beat/miss + move | At the print | P&L, hit rate, magnitude error |
-| [Macro nowcast](macro-nowcast.md) | Next data print | At release | MAE, direction vs consensus, CRPS |
-| [Merger arb](merger-arb.md) | Take the spread or pass | On close or break | P&L, Brier on P(close) |
+| [Baseball](baseball.md) | MLB bet or pass | Same night | P&L, ROI, CLV |
+| [Soccer](soccer.md) | Top-5 league or UCL bet | Per matchday | P&L, ROI, CLV |
 | [Event markets](event-markets.md) | Any binary contract | At close | P&L, CLV, Brier |
+| [Merger arb](merger-arb.md) | Take the spread or pass | On close or break | P&L, Brier on P(close) |
+| [Earnings](earnings.md) | Beat/miss + move | At the print | P&L, hit rate, magnitude error |
+
+**Forecasting**
+
+| Topic | Decision | Settles | Scored by |
+|---|---|---|---|
+| [Weather](weather.md) | Temperature distribution | Daily | CRPS, Brier |
+| [Macro nowcast](macro-nowcast.md) | Next data print | At release | MAE, direction vs consensus, CRPS |
+
+**Technical and professional**
+
+| Topic | Decision | Settles | Scored by |
+|---|---|---|---|
+| [Incident root cause](incident-rootcause.md) | Name the cause | Immediately | Accuracy vs injected fault, time, false leads |
+| [Patent prior art](patent-prior-art.md) | Invalidating references | Immediately | Element coverage, citation validity |
+| [Tax](tax.md) | Ranked actions | Immediately | Arithmetic and rule validity, modelled savings |
+
+**Non-verifiable**
+
+| Topic | Decision | Settles | Scored by |
+|---|---|---|---|
 | [Essays](essays.md) | The essay itself | **Never** | Preference only |
+| [Art analysis](art-analysis.md) | An interpretation | **Never** | Preference only |
 
 ## Verifiable and non-verifiable
 
-Eleven of the twelve topics are **verifiable**: the world produces a number, and P&L or a proper scoring
-rule computes automatically. One is not.
+Fourteen of the sixteen topics are **verifiable**: either the world produces a number, or a mechanical
+check does. Two are not.
+
+Three kinds of verification are in play, and they differ in cost. Markets and forecasting **settle** —
+you wait. Incident root cause, patent art and tax are **checked immediately** against an injected fault,
+a publication date, or a rule table, which means unlimited volume without waiting for the world.
 
 That split is the point of the roster, and it creates a tension worth stating plainly.
 
@@ -44,8 +69,10 @@ and the honest thing is to say so. Votes are what make the arena a product; P&L 
 trustworthy. Which one drives harness selection on verifiable topics is an open decision, not a settled
 one.
 
-**Essays are the control.** No outcome, no scorer, only preference. If the loop works there it works
-anywhere; if it degenerates into longer and more confident writing, nothing is hiding that.
+**Essays and art analysis are the controls.** No outcome, no scorer, only preference. They fail
+differently on purpose: essays reward argument, art writing rewards looking, and its characteristic
+failure is fluent prose written without seeing the work. If the loop degenerates into longer and more
+confident output, it shows up in both with no settlement data to hide behind.
 
 ### Modelling versus research
 
@@ -55,9 +82,11 @@ Worth tracking as the roster grows, because it decides what the arena actually m
 [fx](fx.md), [etf-allocation](etf-allocation.md), [weather](weather.md). A good closed-form beats
 orchestration, so harness design has less room. Cheap to run, fast to settle, weak tests of scaffolding.
 
-**Research topics** — [merger-arb](merger-arb.md), [macro-nowcast](macro-nowcast.md),
-[event-markets](event-markets.md), [earnings](earnings.md). Retrieval, source triage and synthesis do
-the work, which is where harness quality actually shows. Slower and more expensive per answer.
+**Research and search topics** — [merger-arb](merger-arb.md), [macro-nowcast](macro-nowcast.md),
+[event-markets](event-markets.md), [earnings](earnings.md), [patent-prior-art](patent-prior-art.md),
+[incident-rootcause](incident-rootcause.md). Retrieval, triage and knowing where to look next do the
+work, which is where harness quality actually shows. The last two are the sharpest tests on the roster,
+because in both the entire task is deciding what to examine next.
 
 **Mixed** — [soccer](soccer.md), [baseball](baseball.md). Model plus a research edge on lineups,
 officials and conditions.
@@ -68,8 +97,9 @@ If the point is measuring harnesses rather than models, weight the roster toward
 
 Ordered by settled decisions per week, which is what every arena mechanism needs to calibrate against:
 
-1. **Crypto hourly** — ~24 settlements per asset per day. A week here beats a year of earnings.
-2. **Baseball** — fifteen games a night across a dozen markets.
+1. **Incident root cause** — synthetic incidents give perfect ground truth at zero marginal cost and
+   never wait for the world. Unlimited volume, and the hardest scaffolding test here.
+2. **Crypto hourly** — ~24 settlements per asset per day. A week beats a year of earnings.
 3. **Weather** — daily, authoritative source, decades of free archived model data.
 
 Build one of these first, get rating, pairing, voter weighting and canary catch-rates working against
