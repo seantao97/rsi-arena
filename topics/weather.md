@@ -17,6 +17,18 @@ then one tap for why: evidence, reasoning, risk framing, or counter-case.
 
 **Equalized** — same cost ceiling for both agents.
 
+## Scoring
+
+| | |
+|---|---|
+| Stations | A fixed set of 20 US stations with Kalshi temperature ladders |
+| Horizon | Same-day and next-day |
+| Decision time | Any time before the market closes. Timestamp recorded. |
+| Scored by | **CRPS** on the stated distribution, Brier per bracket, and settled P&L where a contract is traded |
+
+CRPS is the right primary metric because the contract requires a full distribution, and it penalises a
+confident wrong forecast far harder than a wide honest one.
+
 ## Why this topic matters out of proportion to its subject
 
 Weather settles **daily**, against an authoritative source, with no subjective judgment about the
