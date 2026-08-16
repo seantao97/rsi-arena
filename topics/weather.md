@@ -67,7 +67,7 @@ apply and is not required.
 
 ## Primitive set
 
-Thirty-five steps.
+Thirty-two steps.
 
 ### Question
 
