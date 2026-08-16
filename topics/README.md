@@ -17,7 +17,7 @@ what the optimizer discovers. If a topic doc contains a pipeline, it is wrong.
 | [Crypto hourly](crypto-hourly.md) | BTC/ETH strike ladder | Every hour | P&L, Brier, calibration |
 | [Baseball](baseball.md) | MLB bet or pass | Same night | P&L, ROI, CLV |
 | [Index options](index-options.md) | NDX structure, any shape | Daily | P&L, Sharpe, drawdown |
-| [ETF allocation](etf-allocation.md) | Weights across 20 ETFs | Daily | Return, Sharpe, turnover |
+| [ETF allocation](etf-allocation.md) | Long/short across 50 ETFs | Daily | Sharpe, return, drawdown |
 | [Weather](weather.md) | Temperature distribution | Daily | CRPS, Brier |
 | [Soccer](soccer.md) | Top-5 league or UCL bet | Per matchday | P&L, ROI, CLV |
 | [Earnings](earnings.md) | Beat/miss + move | At the print | P&L, hit rate, magnitude error |
