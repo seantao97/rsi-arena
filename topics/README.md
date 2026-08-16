@@ -39,7 +39,14 @@ what the optimizer discovers. If a topic doc contains a pipeline, it is wrong.
 |---|---|---|---|
 | [Incident root cause](incident-rootcause.md) | Name the cause | Immediately | Accuracy vs injected fault, time, false leads |
 | [Patent prior art](patent-prior-art.md) | Invalidating references | Immediately | Element coverage, citation validity |
+| [Code review](code-review.md) | Ranked findings on a diff | Immediately | Confirmed findings, false-positive rate |
 | [Tax](tax.md) | Ranked actions | Immediately | Arithmetic and rule validity, modelled savings |
+
+**Consumer**
+
+| Topic | Decision | Settles | Scored by |
+|---|---|---|---|
+| [Purchase](purchase.md) | One product to buy | Immediately | Price/spec validity, then preference |
 
 **Non-verifiable**
 
@@ -50,12 +57,13 @@ what the optimizer discovers. If a topic doc contains a pipeline, it is wrong.
 
 ## Verifiable and non-verifiable
 
-Fourteen of the sixteen topics are **verifiable**: either the world produces a number, or a mechanical
+Sixteen of the eighteen topics are **verifiable**: either the world produces a number, or a mechanical
 check does. Two are not.
 
 Three kinds of verification are in play, and they differ in cost. Markets and forecasting **settle** —
-you wait. Incident root cause, patent art and tax are **checked immediately** against an injected fault,
-a publication date, or a rule table, which means unlimited volume without waiting for the world.
+you wait. Incident root cause, patent art, code review, tax and purchase are **checked immediately** against an
+injected fault, a publication date, an executed test, a rule table, or a live price — which means
+unlimited volume without waiting for the world.
 
 That split is the point of the roster, and it creates a tension worth stating plainly.
 
@@ -84,7 +92,8 @@ orchestration, so harness design has less room. Cheap to run, fast to settle, we
 
 **Research and search topics** — [merger-arb](merger-arb.md), [macro-nowcast](macro-nowcast.md),
 [event-markets](event-markets.md), [earnings](earnings.md), [patent-prior-art](patent-prior-art.md),
-[incident-rootcause](incident-rootcause.md). Retrieval, triage and knowing where to look next do the
+[incident-rootcause](incident-rootcause.md), [code-review](code-review.md), [purchase](purchase.md).
+Retrieval, triage and knowing where to look next do the
 work, which is where harness quality actually shows. The last two are the sharpest tests on the roster,
 because in both the entire task is deciding what to examine next.
 
@@ -104,6 +113,10 @@ Ordered by settled decisions per week, which is what every arena mechanism needs
 
 Build one of these first, get rating, pairing, voter weighting and canary catch-rates working against
 real volume, then point the machinery at the slower topics.
+
+**One caveat on all three:** they need expert judges, and so does almost everything else here.
+[Purchase](purchase.md) is the only topic a layperson can vote on. If vote throughput is the binding
+constraint rather than settlement speed, build that one first instead.
 
 ## What every topic inherits
 
