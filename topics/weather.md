@@ -27,6 +27,12 @@ That makes weather the natural instrument for debugging the arena itself. Rating
 voter weighting, canary catch-rates — all of them need many settled questions to evaluate, and here a
 week produces what earnings produces in a quarter. Build it early even if nobody finds it interesting.
 
+The information calendar is the other thing weather has that nothing else does: it is fully
+deterministic. Model runs land at 00Z, 06Z, 12Z and 18Z, on a schedule published in advance, every day.
+Where other topics get scheduled news sparsely — a CPI print, an earnings date — weather gets four
+information events a day in perpetuity. That is what makes it possible to ask, precisely and at volume,
+whether a market reacted correctly to news.
+
 ## Answer contract
 
 | | |
@@ -35,13 +41,21 @@ week produces what earnings produces in a quarter. Build it early even if nobody
 | **Distribution** | A full predictive distribution over the target, not just a point estimate. For a bracketed question, a probability per bracket summing to 1. |
 | **Evidence** | Model runs and observations cited by name and run time. "The GFS says" without a run timestamp is not evidence. |
 | **Model disagreement** | Where the guidance disagrees, and which way the memo leans. A forecast that hides an ECMWF/GFS split is hiding the whole problem. |
+| **Versus market** | The market-implied distribution from the bracket ladder, and where the memo's distribution differs from it. A memo that matches the ladder everywhere is a summary of the market, not a forecast. |
 | **Counter-case** | The scenario that would produce a materially different outcome. |
 | **Falsifier** | A pre-committed observation — *"if the 12Z run keeps the front west of the city, this is wrong."* |
 | **Confidence** | Stated and justified, tied to ensemble spread rather than to tone. |
 
+The **versus market** line does the same job here that *versus implied* does in
+[earnings](earnings.md): it forces the memo to say something the market has not already said. Weather
+is the better case for it, because a bracket ladder inverts into a whole distribution rather than a
+single implied number, and the contract already requires the memo to produce one on the same target.
+The two are directly comparable. Where a question is not tied to a listed market, the line does not
+apply and is not required.
+
 ## Primitive set
 
-Twenty-nine steps.
+Thirty-five steps.
 
 ### Question
 
@@ -81,18 +95,38 @@ Twenty-nine steps.
 
 | | | |
 |---|---|---|
-| 20 | `read_market(ticker) → book` | The event contract, where the question is tied to one. |
+| 20 | `read_market(ticker) → book` | The event contract, where the question is tied to one. Current bid, ask, last, depth and volume for a single bracket. |
 | 21 | `related_markets(ticker) → [ticker]` | The rest of the temperature ladder. |
 | 22 | `check_coherence(tickers) → violations` | Brackets are mutually exclusive and exhaustive, so their prices must sum to 1.00. Ladder violations here are more common than in any other topic. |
-| 23 | `external_forecast(question) → [source, P]` | Commercial and consumer forecasts for the same station. |
+| 23 | `implied_distribution(ladder) → density` | Inverts the whole ladder into a de-vigged density over the target. Every other topic gets a single implied number out of its market; a bracket ladder gives back a distribution, on the same target and in the same units as the one the contract already asks the memo to produce. This is what `versus market` rests on. |
+| 24 | `external_forecast(question) → [source, P]` | Commercial and consumer forecasts for the same station. |
+
+### Market behaviour
+
+How the ladder got to its current price, rather than what it currently says. All five read from
+archived snapshots, never from a live book, so a question replays identically.
+
+| | | |
+|---|---|---|
+| 25 | `price_path(ticker, window) → series` | Archived bid, ask, last and volume through time, at snapshot resolution rather than daily close. |
+| 26 | `run_impact(ticker, run_time) → move` | Price change attributable to a named model run, by joining `price_path` against `ModelStore` release times. Weather is the only topic whose information calendar is published in advance, which is the only reason this attribution is well posed. |
+| 27 | `flow(ticker, window) → data` | Volume, open interest change, and trade direction where the print discloses it. Separates a price that moved on conviction from one that drifted on a thin book. |
+| 28 | `spread_history(ticker, window) → series` | Spread and depth through time. Tail brackets are thin and wide, and an edge that disappears into the spread was never an edge. |
+| 29 | `convergence(ticker, date) → profile` | How brackets collapse toward 0 or 1 as observations land and the day's high gets locked in. By late afternoon the question is often no longer a forecast, and a memo that still treats it as one is answering the wrong question. |
+
+The pairing worth building for is `run_impact` with `ensemble`. The characteristic failure of a
+weather market is overreacting to a single deterministic run when the ensemble barely moved — which is
+the market's version of the failure this topic already exists to catch. A memo that can show the 12Z
+GFS moved the ladder nine cents while the spread across members did not justify it is making exactly
+the argument the objective rewards.
 
 ### Research, decision and composition
 
 | | | |
 |---|---|---|
-| 24 | `refine_query` · `search` · `fetch` · `weigh_source` · `extract_claims` · `verify_claim` | *Shared.* Less central here than elsewhere — the good sources are numeric, not textual. |
-| 25 | `counter` · `cost_model` · `breakeven` · `size` | *Shared.* Fee drag is smallest in the tails, which is where bracket questions usually sit. |
-| 26 | `cite` · `draft` · `critique` | *Shared.* |
+| 30 | `refine_query` · `search` · `fetch` · `weigh_source` · `extract_claims` · `verify_claim` | *Shared.* Less central here than elsewhere — the good sources are numeric, not textual. |
+| 31 | `counter` · `cost_model` · `breakeven` · `size` | *Shared.* Fee drag is smallest in the tails, which is where bracket questions usually sit. |
+| 32 | `cite` · `draft` · `critique` | *Shared.* |
 
 ## Runtime additions
 
@@ -100,6 +134,7 @@ Twenty-nine steps.
 |---|---|---|
 | `ModelStore` | NWP archive | Registered model runs and ensemble members, keyed by run time. Archived rather than live, so a question can be replayed exactly. |
 | `ObsStore` | Station data | METAR, ASOS and climate reports, with correction history — the original observation *and* the later amendment. |
+| `BookStore` | Order book archive | Polled snapshots of every tracked ladder — bid, ask, depth, volume, open interest — keyed by capture time, plus trade prints. Backs the market-behaviour primitives. **Read-only. No order-placement endpoint is exposed; agents write memos, they do not trade.** |
 | `Settlement` | History | Verified outcomes per station, readable by `recall`. Agent memory only. |
 
 ## Notes
@@ -112,3 +147,18 @@ or the leaderboard measures nothing but noise tolerance.
 distribution the members do not support is straightforwardly wrong in a way readers can be shown. That
 makes weather a good place to test whether the arena's judges reward calibration or confidence — the
 question the whole project is ultimately about.
+
+**The book archive is a prerequisite, not a feature.** An exchange serves depth as it stands now;
+it does not serve what the book looked like last Tuesday. Trades and candles can be pulled
+retroactively, but depth and spread exist only if something was recording them. So `BookStore` has to
+be polling before the first question is asked, and densely enough around run releases that
+`run_impact` has something to attribute against. This is the one part of the topic with a hard lead
+time — everything else can be built in any order, this cannot be backfilled.
+
+**Genre drift is the risk to watch.** [Event markets](event-markets.md) already notes that
+coherence-and-disagreement memos are a different genre than the objective describes, and that readers
+may not reward them. Market behaviour amplifies that here: a memo that is mostly flow commentary has
+stopped being a forecast memo whatever the contract says. `versus market` is deliberately narrow — it
+asks where the memo's distribution departs from the ladder, not for an account of how the ladder
+traded. If votes show readers rewarding microstructure over forecasting, that is the signal to split
+it into a topic of its own rather than to widen this one.
