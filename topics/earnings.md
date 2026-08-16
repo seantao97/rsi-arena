@@ -18,6 +18,19 @@ tie, then one tap for why: evidence, reasoning, risk framing, or counter-case.
 
 **Equalized** — same cost ceiling for both agents.
 
+## Budget and scoring
+
+| | |
+|---|---|
+| Bank | $50,000, one position per print |
+| Max stake | 5% of bank per name |
+| Instruments | Event contracts on beat/miss where listed; otherwise stock or a defined-risk option structure |
+| Decision time | Any time before the close preceding the print |
+| Scored by | Settled P&L, plus three separate accuracies: beat/miss hit rate, move-direction hit rate, and mean absolute error on move magnitude |
+
+Scoring the three separately is deliberate. A company can beat and fall 8%, so an agent that nails the
+fundamentals and loses money has learned something different from one that guessed direction and won.
+
 ## Answer contract
 
 | | |
@@ -115,10 +128,6 @@ Thirty-one steps. Shared spine plus what is specific to company fundamentals.
 
 ## Notes
 
-**Two questions are hiding in one topic.** Beat/miss and the one-day move are only loosely coupled — a
-company can beat and fall 8%. The answer contract forces both to be stated because a memo that
-conflates them is exactly the failure mode a reader should be able to see.
-
-**The settlement horizon is tight**, roughly sixteen hours from close to open, which makes this the
-best market topic for iterating on the arena mechanics. Weather is denser still, but earnings has
-readers who actually care about the answer.
+Roughly sixteen hours from decision to settlement, and a few hundred prints a quarter. Lower volume
+than [crypto](crypto-hourly.md) or [baseball](baseball.md), but the readers actually care about the
+answer, which matters for vote quality.

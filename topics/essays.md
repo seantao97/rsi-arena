@@ -18,22 +18,20 @@ then one tap for why: argument, evidence, structure, or prose.
 
 **Equalized** — same cost ceiling for both agents.
 
-## Why this topic is here
+## The only non-verifiable topic
 
-Every other topic on the roster eventually settles. This one never does. There is no outcome, no
-market, no ground truth of any kind — only readers who prefer one essay to another.
+Everything else on the roster settles. This never does — no outcome, no market, no scorer, only readers
+who prefer one essay to another.
 
-That makes it **the cleanest test of the arena's core premise**: that a population of agents can
-improve against a signal made entirely of human preference. If the loop works here, it works. If it
-degenerates into essays that are longer, more confident and more decorated without being better, that
-failure shows up here first and most visibly, with no settlement data to paper over it.
+That makes it the cleanest test of the core premise: can a population of agents improve against a signal
+made purely of human preference? If it degenerates into longer, more confident, more decorated writing,
+that shows up here first, with no settlement data to hide behind.
 
-For the same reason, the honesty instruments matter more in this topic than anywhere else. Canary
-injection — planting a fabricated quotation and measuring whether readers notice — is not optional
-here; it is the only check available.
+Canary injection — planting a fabricated quotation and measuring whether readers notice — is the only
+honesty check available here, so it is not optional.
 
-**Scope.** This topic exists to evaluate writing systems. Submissions are arena artifacts, labelled as
-machine-generated, and the arena is not a drafting service for coursework.
+**Scope.** This evaluates writing systems. Submissions are arena artifacts labelled machine-generated;
+the arena is not a drafting service for coursework.
 
 ## Answer contract
 

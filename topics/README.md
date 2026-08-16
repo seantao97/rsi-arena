@@ -1,90 +1,170 @@
 # Topics
 
-A **topic** is a self-contained problem domain for the arena. Each one supplies three things:
+A **topic** is a self-contained problem domain. Each one supplies:
 
 1. an **objective** — what a good answer is, stated so a reader can judge two of them side by side
-2. an **answer contract** — the required contents of a submission, checked mechanically before it reaches a battle
-3. a **primitive set** — the typed steps an agent may call in that domain
+2. a **budget and scoring rule** — the account, the limits, and how the answer is scored when truth arrives
+3. an **answer contract** — required contents, checked mechanically before a comparison
+4. a **primitive set** — the typed steps an agent may call
 
-A topic never specifies orchestration. Which primitive runs first, how often, and whether it loops is
+A topic never specifies orchestration. Which primitive runs first, how often, whether it loops — that is
 what the optimizer discovers. If a topic doc contains a pipeline, it is wrong.
-
-Topics are scoped independently because a good weather harness tells you nothing about a good essay
-harness — the primitive sets barely overlap, and neither do the leaderboards.
 
 ## Catalogue
 
-| Topic | Output | Settles? | Notes |
+**Markets and trading**
+
+| Topic | Decision | Settles | Scored by |
 |---|---|---|---|
-| [Event markets](event-markets.md) | Decision memo | Yes, at market close | The general case. Start here — the other market topics are specialisations of it. |
-| [Earnings](earnings.md) | Pre-print memo | Yes, next morning | Beat/miss plus one-day move direction and magnitude. |
-| [Sports](sports.md) | Pre-game memo | Yes, hours later | Full scoreline distribution, not just a winner. |
-| [Weather](weather.md) | Forecast memo | Yes, next day | Densest feedback of any topic; the natural place to debug the arena itself. |
-| [Essays](essays.md) | Essay | Never | Pure preference. No settlement anywhere, which makes it the cleanest test of the arena's premise. |
+| [Crypto hourly](crypto-hourly.md) | BTC/ETH strike ladder | Every hour | P&L, Brier, calibration |
+| [Index options](index-options.md) | NDX structure, any shape | Daily | P&L, Sharpe, drawdown |
+| [ETF allocation](etf-allocation.md) | Long/short across 50 ETFs | Daily | Sharpe, return, drawdown |
+| [FX](fx.md) | G10 positions | Daily | Sharpe, return, carry attribution |
+| [Baseball](baseball.md) | MLB bet or pass | Same night | P&L, ROI, CLV |
+| [Soccer](soccer.md) | Top-5 league or UCL bet | Per matchday | P&L, ROI, CLV |
+| [Event markets](event-markets.md) | Any binary contract | At close | P&L, CLV, Brier |
+| [Merger arb](merger-arb.md) | Take the spread or pass | On close or break | P&L, Brier on P(close) |
+| [Earnings](earnings.md) | Beat/miss + move | At the print | P&L, hit rate, magnitude error |
+
+**Forecasting**
+
+| Topic | Decision | Settles | Scored by |
+|---|---|---|---|
+| [Weather](weather.md) | Temperature distribution | Daily | CRPS, Brier |
+| [Macro nowcast](macro-nowcast.md) | Next data print | At release | MAE, direction vs consensus, CRPS |
+
+**Technical and professional**
+
+| Topic | Decision | Settles | Scored by |
+|---|---|---|---|
+| [Incident root cause](incident-rootcause.md) | Name the cause | Immediately | Accuracy vs injected fault, time, false leads |
+| [Patent prior art](patent-prior-art.md) | Invalidating references | Immediately | Element coverage, citation validity |
+| [Code review](code-review.md) | Ranked findings on a diff | Immediately | Confirmed findings, false-positive rate |
+| [Tax](tax.md) | Ranked actions | Immediately | Arithmetic and rule validity, modelled savings |
+
+**Consumer**
+
+| Topic | Decision | Settles | Scored by |
+|---|---|---|---|
+| [Purchase](purchase.md) | One product to buy | Immediately | Price/spec validity, then preference |
+
+**Non-verifiable**
+
+| Topic | Decision | Settles | Scored by |
+|---|---|---|---|
+| [Essays](essays.md) | The essay itself | **Never** | Preference only |
+| [Art analysis](art-analysis.md) | An interpretation | **Never** | Preference only |
+
+## Verifiable and non-verifiable
+
+Sixteen of the eighteen topics are **verifiable**: either the world produces a number, or a mechanical
+check does. Two are not.
+
+Three kinds of verification are in play, and they differ in cost. Markets and forecasting **settle** —
+you wait. Incident root cause, patent art, code review, tax and purchase are **checked immediately** against an
+injected fault, a publication date, an executed test, a rule table, or a live price — which means
+unlimited volume without waiting for the world.
+
+That split is the point of the roster, and it creates a tension worth stating plainly.
+
+**Every verifiable topic runs two scoreboards.** Preference votes rate the reasoning; realised P&L rates
+the decision. Both are published. Where they disagree, P&L is right — and the disagreement is the most
+valuable number the arena produces, because it says whether reader preference tracks being correct or
+merely tracks sounding correct.
+
+**This has a consequence for the optimizer.** Where P&L exists it is a better training signal than votes,
+and the honest thing is to say so. Votes are what make the arena a product; P&L is what makes it
+trustworthy. Which one drives harness selection on verifiable topics is an open decision, not a settled
+one.
+
+**Essays and art analysis are the controls.** No outcome, no scorer, only preference. They fail
+differently on purpose: essays reward argument, art writing rewards looking, and its characteristic
+failure is fluent prose written without seeing the work. If the loop degenerates into longer and more
+confident output, it shows up in both with no settlement data to hide behind.
+
+### Modelling versus research
+
+Worth tracking as the roster grows, because it decides what the arena actually measures.
+
+**Modelling topics** — [crypto-hourly](crypto-hourly.md), [index-options](index-options.md),
+[fx](fx.md), [etf-allocation](etf-allocation.md), [weather](weather.md). A good closed-form beats
+orchestration, so harness design has less room. Cheap to run, fast to settle, weak tests of scaffolding.
+
+**Research and search topics** — [merger-arb](merger-arb.md), [macro-nowcast](macro-nowcast.md),
+[event-markets](event-markets.md), [earnings](earnings.md), [patent-prior-art](patent-prior-art.md),
+[incident-rootcause](incident-rootcause.md), [code-review](code-review.md), [purchase](purchase.md).
+Retrieval, triage and knowing where to look next do the
+work, which is where harness quality actually shows. The last two are the sharpest tests on the roster,
+because in both the entire task is deciding what to examine next.
+
+**Mixed** — [soccer](soccer.md), [baseball](baseball.md). Model plus a research edge on lineups,
+officials and conditions.
+
+If the point is measuring harnesses rather than models, weight the roster toward research.
+
+### Where to start
+
+Ordered by settled decisions per week, which is what every arena mechanism needs to calibrate against:
+
+1. **Incident root cause** — synthetic incidents give perfect ground truth at zero marginal cost and
+   never wait for the world. Unlimited volume, and the hardest scaffolding test here.
+2. **Crypto hourly** — ~24 settlements per asset per day. A week beats a year of earnings.
+3. **Weather** — daily, authoritative source, decades of free archived model data.
+
+Build one of these first, get rating, pairing, voter weighting and canary catch-rates working against
+real volume, then point the machinery at the slower topics.
+
+**One caveat on all three:** they need expert judges, and so does almost everything else here.
+[Purchase](purchase.md) is the only topic a layperson can vote on. If vote throughput is the binding
+constraint rather than settlement speed, build that one first instead.
 
 ## What every topic inherits
 
 ### The comparison
 
-Two agents answer the same question under the same cost ceiling. Both answers are shown blind, side
-by side, with author identity and formatting signatures stripped and sides randomised. The reader
-picks one, or a tie, then taps one reason.
-
-**Votes are the only supervision signal.** Where a topic settles, that outcome is recorded and made
-available to agents as memory so they can calibrate themselves — it is never a rating input, and no
-comparison between agents uses it.
+Two agents answer the same question under the same cost ceiling. Both answers are shown blind, side by
+side, identity and formatting signatures stripped, sides randomised. The reader picks one, or a tie,
+then taps one reason.
 
 ### Shared runtime
 
-Fixed infrastructure behind every topic's primitives. Agents call through it and cannot modify or
-bypass it, which is the only reason the caps and the provenance rules hold.
+Agents call through it and cannot modify or bypass it, which is the only reason the caps and the
+provenance rules hold.
 
 | | | |
 |---|---|---|
 | `R1` | **Clock** | One source of time. Every search, fetch and submission is stamped with it. |
-| `R2` | **Governor** | Per-answer hard caps — 40 searches, 120 fetches, 20 code runs, 25 MB, 8 minutes, $2.00 — plus domain denylist, robots rules and per-host rate limits. Calls past a cap are refused, not queued. |
-| `R3` | **Archive** | Immutable copy of every fetched page, keyed by URL and fetch time, so citations survive link rot and runs stay reproducible. |
-| `R4` | **Provenance** | Checked at submission: every claim must resolve to an archived document. Invented citations are rejected rather than penalised. |
-| `R5` | **Budget** | Meters spend in USD and enforces the shared ceiling for both agents answering a question. |
+| `R2` | **Governor** | Per-answer caps — 40 searches, 120 fetches, 20 code runs, 25 MB, 8 minutes, $2.00 — plus domain denylist, robots rules, per-host rate limits. Calls past a cap are refused, not queued. |
+| `R3` | **Archive** | Immutable copy of every fetched page, keyed by URL and fetch time. |
+| `R4` | **Provenance** | Every claim must resolve to an archived document. Invented citations are rejected, not penalised. |
+| `R5` | **Budget** | Meters spend in USD and enforces the shared ceiling for both agents. |
 | `R6` | **Submission** | Runs the answer-contract check, then hashes and timestamps. |
-| `R7` | **Sandbox** | Backs `run_code`. Fixed library allowlist, no network, no filesystem outside a scratch directory, no state between calls, CPU and memory ceilings. |
-| `R8` | **Journal** | Per-agent memory behind `recall` and `remember`. Written every episode; never rewritten by the optimizer. |
+| `R7` | **Sandbox** | Backs `run_code`. Library allowlist, no network, no filesystem outside a scratch dir, no state between calls. |
+| `R8` | **Journal** | Per-agent memory behind `recall` and `remember`. Written every episode, never rewritten by the optimizer. |
 | `R9` | **Registry** | The fixed list of data sources a topic may reach. An agent cannot invent a source. |
 
-Topic docs list only the runtime they add on top of these.
+Trading topics add a `Bank` or `Book` — a simulated account with positions, cash and daily marks — and a
+`Settlement` store the agent reads through `recall`. All market feeds are **read-only; no topic exposes
+an order-entry endpoint.**
 
 ### Shared primitives
 
-Most topics reuse this spine. Topic docs mark them as shared and spend their space on what is
-domain-specific.
+Most topics reuse this spine and spend their space on what is domain-specific:
 
-`refine_query` · `search` · `fetch` · `weigh_source` · `extract_claims` · `verify_claim` ·
-`compute` · `run_code` · `recall` · `remember` · `cite` · `draft` · `critique`
+`search` · `fetch` · `weigh_source` · `extract_claims` · `verify_claim` · `compute` · `run_code` ·
+`estimate` · `calibrate` · `sensitivity` · `recall` · `remember` · `counter` · `cite` · `draft` ·
+`critique`
 
-## Choosing the next topic
+Trading topics add `cost_model` · `breakeven` · `kelly` · `check_coherence` · `closing_line`.
 
-A domain is worth building when all four hold. The first two are what make it an arena at all; the
-second two are what make it worth the engineering.
+[Crypto hourly](crypto-hourly.md) deliberately drops `search` and `fetch` — forty minutes of news moves a
+settled probability less than a better volatility estimate does.
 
-1. **Automatic scoring fails.** If a scorer exists, use it — the arena adds nothing but latency.
-2. **Competent judges still agree with each other.** Measure this before building. If expert-vs-expert
-   agreement is not clearly above chance, there is no objective, only a poll.
-3. **Generating is much harder than recognising.** This gap is where harness quality lives. When it
-   inverts — hard to produce *and* hard to evaluate — votes are noise with a leaderboard on top.
-4. **Some fragment settles later.** Not required, but it is the only way to check whether preference
-   tracked quality rather than persuasion.
+## Adding a topic
 
-### Candidates worth considering
-
-| Candidate | Why it fits |
-|---|---|
-| **Dataset analysis** — "here is a CSV, what is the story?" | The strongest harness leverage of anything on this list, because `run_code` does the real work. Whether an analysis is *sound* is checkable by an expert; what the story *is* has no scorer. |
-| **Code review** — a diff, and what is wrong with it | Sits squarely in the checkable band: a claimed bug either reproduces or does not, so votes can be audited against something. Heavy retrieval and reasoning scaffolding. |
-| **Contract redline** — what is wrong with this, for my side | Never settles, high expertise, enormous generation-verification gap. Lawyers agree with each other far more than laypeople expect. |
-| **Literature triage** — what does the evidence actually say | Judge agreement is high among clinicians and researchers; the failure mode is confident synthesis of a thin base, which is exactly what an arena can measure. Avoid diagnosis. |
-| **Flight delay / operational forecasting** | Settles in hours with enormous volume. Less interesting as a product than as instrumentation — the cheapest place to debug rating, pairing and voter weighting before pointing them at something slow. |
-| **Election forecasting** | Granular targets (seat counts, margins) where published models are public and beatable, and a long settlement horizon that tests whether the arena survives slow feedback. |
-
-Weather deserves a note here too: it settles daily against an authoritative source, needs no
-subjective judgment for the settleable part, and has free archived model data going back decades.
-If a mechanism in the arena is suspect, weather is where to test it.
+1. **Automatic scoring fails, or exists but is worth measuring against.** If a scorer exists and you trust
+   it completely, use it and skip the arena.
+2. **Competent judges agree with each other.** Measure this before building. If expert-vs-expert agreement
+   is not clearly above chance, there is no objective, only a poll.
+3. **Generating is much harder than recognising.** That gap is where harness quality lives.
+4. **Settlement is fast enough to learn from.** Weekly beats quarterly by more than the ratio suggests.
