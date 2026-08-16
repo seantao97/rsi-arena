@@ -20,13 +20,16 @@ what the optimizer discovers. If a topic doc contains a pipeline, it is wrong.
 | [ETF allocation](etf-allocation.md) | Long/short across 50 ETFs | Daily | Sharpe, return, drawdown |
 | [Weather](weather.md) | Temperature distribution | Daily | CRPS, Brier |
 | [Soccer](soccer.md) | Top-5 league or UCL bet | Per matchday | P&L, ROI, CLV |
+| [FX](fx.md) | G10 positions | Daily | Sharpe, return, carry attribution |
 | [Earnings](earnings.md) | Beat/miss + move | At the print | P&L, hit rate, magnitude error |
+| [Macro nowcast](macro-nowcast.md) | Next data print | At release | MAE, direction vs consensus, CRPS |
+| [Merger arb](merger-arb.md) | Take the spread or pass | On close or break | P&L, Brier on P(close) |
 | [Event markets](event-markets.md) | Any binary contract | At close | P&L, CLV, Brier |
 | [Essays](essays.md) | The essay itself | **Never** | Preference only |
 
 ## Verifiable and non-verifiable
 
-Eight of the nine topics are **verifiable**: the world produces a number, and P&L or a proper scoring
+Eleven of the twelve topics are **verifiable**: the world produces a number, and P&L or a proper scoring
 rule computes automatically. One is not.
 
 That split is the point of the roster, and it creates a tension worth stating plainly.
@@ -43,6 +46,23 @@ one.
 
 **Essays are the control.** No outcome, no scorer, only preference. If the loop works there it works
 anywhere; if it degenerates into longer and more confident writing, nothing is hiding that.
+
+### Modelling versus research
+
+Worth tracking as the roster grows, because it decides what the arena actually measures.
+
+**Modelling topics** — [crypto-hourly](crypto-hourly.md), [index-options](index-options.md),
+[fx](fx.md), [etf-allocation](etf-allocation.md), [weather](weather.md). A good closed-form beats
+orchestration, so harness design has less room. Cheap to run, fast to settle, weak tests of scaffolding.
+
+**Research topics** — [merger-arb](merger-arb.md), [macro-nowcast](macro-nowcast.md),
+[event-markets](event-markets.md), [earnings](earnings.md). Retrieval, source triage and synthesis do
+the work, which is where harness quality actually shows. Slower and more expensive per answer.
+
+**Mixed** — [soccer](soccer.md), [baseball](baseball.md). Model plus a research edge on lineups,
+officials and conditions.
+
+If the point is measuring harnesses rather than models, weight the roster toward research.
 
 ### Where to start
 
