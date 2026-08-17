@@ -55,11 +55,16 @@ Verified against the live exchange on 2026-08-17.
   are public. Credentials are only needed for the WebSocket and `/portfolio`.
 - **13,029 series exist; 3,403 are sports** — the largest category on the exchange,
   ahead of Entertainment (2,500) and Politics (2,150).
-- **Sport and market type are not API fields.** Both are encoded in the ticker
-  (`KXNBA3PT` is a player-threes prop) and must be derived. That is what
-  [`taxonomy.py`](taxonomy.py) does; it resolves 73% of sports series to a named
-  league and 75% to a market type. The residue is the long tail of world
-  leagues, and `league == "UNKNOWN"` is reported honestly rather than guessed.
+- **Sport *is* an API field, in `tags`.** It covers 96% of sports series and is
+  far better than pattern-matching a ticker, so [`taxonomy.py`](taxonomy.py)
+  reads it first and falls back to regex. Sport is unresolved for 4% of series;
+  126 have no derivable league, reported as `UNKNOWN` rather than guessed.
+- **`frequency` separates fixtures from futures.** `custom`/`daily`/`weekly`
+  mean one fixture; `annual`/`one_off` mean a season or tournament. That is
+  authoritative, where inferring it from market type was not — it finds 2,464
+  fixture-level series against 1,547 by heuristic.
+- **Market type is not an API field** and is still derived from ticker plus
+  title.
 - **Rate limits are token-cost** with separate read and write buckets, refilling
   at 200/s on Basic. `RateLimiter` runs at 70% of budget.
 - **Event tickers cannot be split on `-`** to recover the series: some series
@@ -122,12 +127,42 @@ Matching to the feed is date plus a scored name comparison, since Kalshi's
 codes are its own. Confidence is returned with every link; 0.9 means the code
 is a clean prefix of the team name, 0.7 means it matched on initials.
 
+## Field events
+
+Golf, motorsport, Olympics and chess are priced as a field of entrants rather
+than a two-sided fixture, so there is no team blob to split — the entrants are
+the market tickers.
+
+```python
+linking.field_entrants(client, "KXKFTOUR-ADC26")   # 160 entrants
+```
+
+`linking.FIELD_SPORTS` says which sports to route this way.
+
+## Streaming
+
+[`stream.py`](stream.py) consumes `orderbook_delta` for true tick resolution.
+It maintains the book locally from one snapshot plus deltas, and **drops deltas
+that arrive before a snapshot or out of sequence**, marking the book desynced
+rather than silently serving a wrong one.
+
+```python
+s = KalshiStream(tickers)
+s.on_book = lambda t, b: print(t, b.best_bid, b.best_ask)
+asyncio.run(s.run())
+```
+
+Needs `pip install websockets` and credentials — Kalshi authenticates the socket
+even for public channels. Polling via `recorder.py` needs neither.
+
 ## Known gaps
 
-- **WebSocket.** `client.ws_auth_headers()` signs the handshake correctly, but
-  the `orderbook_delta` consumer is not written. Polling at 1Hz is the current
-  path and is enough for everything except true tick reconstruction.
-- **Order book depth at scale.** Books are one call per market, so recording
-  them for a full slate is expensive. `--book-depth N` limits it to the top N.
-- **Non-team sports.** Fixture parsing assumes two competitors. Golf, motorsport
-  and tennis draws need their own handling.
+- **Stream is untested against the live socket.** The sequencing logic is unit
+  tested (snapshot, in-order delta, gap detection, delta-before-snapshot) but
+  no credentials were configured here, so the handshake itself is unverified.
+- **Order book depth at scale.** REST books are one call per market, so
+  recording them for a full slate is expensive. Use the stream, or
+  `--book-depth N` to cap it.
+- **126 series have no derivable league.** Mostly one-off world-soccer
+  competitions. They still carry a correct sport and a `SOCCER_OTHER`-style
+  generic league, so filtering by sport loses nothing.

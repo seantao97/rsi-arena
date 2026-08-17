@@ -2,8 +2,10 @@
 
 Kalshi encodes almost everything in the series ticker: ``KXNFLGAME`` is a pro
 football game winner, ``KXNBA3PT`` is a player threes prop. There is no API
-field for sport or market type, so this module derives both from the ticker
-and title together.
+field for market type, so it is derived from the ticker and title. **Sport is
+an API field** — ``series.tags`` carries it for 96% of sports series, so tags
+are used first and the ticker regex is only a fallback. ``series.frequency``
+separates fixtures (``custom``) from season futures (``annual``, ``one_off``).
 
 Coverage on the 2026-08-17 sweep: 73% of sports series resolve to a named
 league, 75% to a market type. The residue is the long tail of world leagues
@@ -54,6 +56,26 @@ class MarketType(str, Enum):
     DRAFT = "draft"
     TRANSFER = "transfer"          # players, managers, coaches
     OTHER = "other"
+
+
+# Kalshi's own ``tags`` field, which covers 96% of sports series. Far more
+# reliable than pattern-matching a ticker, so it is consulted first.
+TAG_TO_SPORT = {
+    "soccer": Sport.SOCCER, "basketball": Sport.BASKETBALL,
+    "football": Sport.FOOTBALL, "cfb": Sport.FOOTBALL,
+    "baseball": Sport.BASEBALL, "hockey": Sport.HOCKEY,
+    "tennis": Sport.TENNIS, "table tennis": Sport.TENNIS,
+    "golf": Sport.GOLF, "esports": Sport.ESPORTS, "video games": Sport.ESPORTS,
+    "mma": Sport.COMBAT, "ufc": Sport.COMBAT, "boxing": Sport.COMBAT,
+    "motorsport": Sport.MOTORSPORT, "cycling": Sport.MOTORSPORT,
+    "cricket": Sport.CRICKET, "darts": Sport.DARTS, "chess": Sport.CHESS,
+    "olympics": Sport.OLYMPICS,
+    "rugby": Sport.OTHER, "lacrosse": Sport.OTHER, "squash": Sport.OTHER,
+    "aussie rules": Sport.OTHER,
+}
+
+# Kalshi ``frequency`` values that mean "one fixture" rather than "a season".
+FIXTURE_FREQUENCIES = {"custom", "daily", "weekly"}
 
 
 # League detection. Order matters — longer, more specific stems first.
@@ -143,13 +165,23 @@ class SeriesClass:
     league: str
     market_type: MarketType
     title: str = ""
+    frequency: str = ""
+    sport_source: str = "regex"   # "tag" when it came from Kalshi's own field
+
+    @property
+    def is_fixture(self) -> bool:
+        """True when the series covers single fixtures rather than a season.
+
+        Uses Kalshi's ``frequency`` where present, which is authoritative, and
+        falls back to the market type.
+        """
+        if self.frequency:
+            return self.frequency in FIXTURE_FREQUENCIES
+        return self.is_game_level
 
     @property
     def is_game_level(self) -> bool:
-        """True for markets tied to a single fixture, as opposed to season futures.
-
-        Game-level markets are the ones worth joining against live game state.
-        """
+        """True for market types tied to a single fixture."""
         return self.market_type in {
             MarketType.GAME_WINNER,
             MarketType.SPREAD,
@@ -166,7 +198,9 @@ def _strip_prefix(ticker: str) -> str:
     return ticker[2:] if ticker.startswith("KX") else ticker
 
 
-def classify_series(ticker: str, title: str = "", category: str = "") -> SeriesClass:
+def classify_series(ticker: str, title: str = "", category: str = "",
+                    tags: list[str] | None = None,
+                    frequency: str = "") -> SeriesClass:
     """Classify a series ticker into sport, league and market type.
 
     ``category`` is Kalshi's own field; when it is present and not ``Sports``
@@ -174,16 +208,34 @@ def classify_series(ticker: str, title: str = "", category: str = "") -> SeriesC
     cheaply without a second pass.
     """
     if category and category != "Sports":
-        return SeriesClass(ticker, Sport.OTHER, "NONSPORT", MarketType.OTHER, title)
+        return SeriesClass(ticker, Sport.OTHER, "NONSPORT", MarketType.OTHER,
+                           title, frequency, "category")
 
     stem = _strip_prefix(ticker).upper()
     hay = f"{stem} {title.upper()}"
+
+    # Kalshi's tag is authoritative for sport when present.
+    tag_sport = None
+    for tag in tags or []:
+        hit = TAG_TO_SPORT.get(tag.strip().lower())
+        if hit:
+            tag_sport = hit
+            break
 
     sport, league = Sport.OTHER, "UNKNOWN"
     for pattern, lg, sp in _LEAGUE_PATTERNS:
         if re.search(pattern, hay):
             sport, league = sp, lg
             break
+
+    sport_source = "regex"
+    if tag_sport:
+        sport_source = "tag"
+        if sport is Sport.OTHER or sport is not tag_sport:
+            # The tag wins on sport. Keep a league only if it agrees.
+            if sport is not tag_sport:
+                league = league if sport is tag_sport else _generic_league(tag_sport, league)
+            sport = tag_sport
 
     if sport is Sport.OTHER and re.search(
             r"\bBTTS\b|GOALSCORER|CLEAN ?SHEET|\bCORNERS?\b|\bGOALS?\b|BOTH TEAMS", hay):
@@ -195,13 +247,33 @@ def classify_series(ticker: str, title: str = "", category: str = "") -> SeriesC
             market_type = mt
             break
 
-    return SeriesClass(ticker, sport, league, market_type, title)
+    return SeriesClass(ticker, sport, league, market_type, title,
+                       frequency, sport_source)
+
+
+def _generic_league(sport: Sport, current: str) -> str:
+    """A per-sport catch-all so an unmatched league is still usable.
+
+    Better than UNKNOWN: an agent filtering on ``sport`` still gets everything,
+    and the label says which sport rather than nothing.
+    """
+    if current not in ("UNKNOWN", "NONSPORT"):
+        return current
+    return {
+        Sport.SOCCER: "SOCCER_OTHER", Sport.BASKETBALL: "BASKET_OTHER",
+        Sport.FOOTBALL: "FOOTBALL_OTHER", Sport.BASEBALL: "BASEBALL_OTHER",
+        Sport.HOCKEY: "HOCKEY_OTHER", Sport.TENNIS: "TENNIS",
+        Sport.GOLF: "GOLF", Sport.COMBAT: "COMBAT", Sport.ESPORTS: "ESPORTS",
+        Sport.MOTORSPORT: "MOTORSPORT", Sport.CRICKET: "CRICKET",
+        Sport.DARTS: "DARTS", Sport.CHESS: "CHESS", Sport.OLYMPICS: "OLYMPICS",
+    }.get(sport, "UNKNOWN")
 
 
 def classify_many(series: list[dict]) -> list[SeriesClass]:
     """Classify a list of series objects as returned by ``/series``."""
     return [
-        classify_series(s.get("ticker", ""), s.get("title", ""), s.get("category", ""))
+        classify_series(s.get("ticker", ""), s.get("title", ""),
+                        s.get("category", ""), s.get("tags"), s.get("frequency", ""))
         for s in series
     ]
 

@@ -17,13 +17,16 @@ what is configured without printing key material.
 from .client import KalshiClient
 from .credentials import Credentials, load as load_credentials, status as credential_status
 from .discovery import Discovery, MarketRef
-from .linking import Fixture, Link, parse_event_ticker, harvest_team_codes
+from .linking import (Fixture, FieldEvent, Link, parse_event_ticker,
+                      parse_field_event, field_entrants, harvest_team_codes)
 from .quotes import OrderBook, Quote, Quotes
+from .stream import KalshiStream, LiveBook
 from .taxonomy import MarketType, SeriesClass, Sport, classify_series
 
 __all__ = [
     "KalshiClient", "Credentials", "load_credentials", "credential_status",
     "Discovery", "MarketRef", "Quotes", "Quote", "OrderBook",
-    "Fixture", "Link", "parse_event_ticker", "harvest_team_codes",
+    "Fixture", "FieldEvent", "Link", "parse_event_ticker", "parse_field_event",
+    "field_entrants", "harvest_team_codes", "KalshiStream", "LiveBook",
     "Sport", "MarketType", "SeriesClass", "classify_series",
 ]

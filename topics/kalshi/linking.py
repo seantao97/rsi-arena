@@ -28,6 +28,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
 from .client import KalshiClient
+from .taxonomy import Sport
+
+# Sports priced as a field of entrants, not a two-sided fixture.
+FIELD_SPORTS = {Sport.GOLF, Sport.MOTORSPORT, Sport.OLYMPICS, Sport.CHESS}
 
 _MONTHS = {m: i for i, m in enumerate(
     ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -111,6 +115,47 @@ def parse_event_ticker(event_ticker: str, series_ticker: str | None = None,
         away, home = split_team_blob(blob, team_codes)
 
     return Fixture(event_ticker, series, when, start, away, home, blob, suffix)
+
+
+@dataclass(frozen=True)
+class FieldEvent:
+    """A tournament with many entrants rather than two competitors.
+
+    Golf, motorsport and open tennis draws are priced one market per entrant,
+    so there is no team blob to split — the entrants are the market tickers.
+    """
+
+    event_ticker: str
+    series_ticker: str
+    date: date | None
+    label: str
+    entrants: list[str]
+
+
+def parse_field_event(event_ticker: str, entrant_tickers: list[str],
+                      series_ticker: str | None = None) -> FieldEvent:
+    """Model an event as a field rather than a fixture.
+
+    Use when ``parse_event_ticker`` returns None or the sport has no two-sided
+    fixture — check ``SeriesClass.sport`` against FIELD_SPORTS first.
+    """
+    series, _, rest = event_ticker.partition("-")
+    when = None
+    m = re.match(r"^(\d{2})([A-Z]{3})(\d{2})", rest)
+    if m:
+        try:
+            when = date(2000 + int(m.group(1)), _MONTHS[m.group(2)], int(m.group(3)))
+        except (KeyError, ValueError):
+            when = None
+    entrants = sorted({t.rsplit("-", 1)[-1] for t in entrant_tickers if "-" in t})
+    return FieldEvent(event_ticker, series_ticker or series, when, rest, entrants)
+
+
+def field_entrants(client: KalshiClient, event_ticker: str) -> list[str]:
+    """Entrant codes for a field event, read from its market tickers."""
+    tickers = [m.get("ticker", "") for m in
+               client.paginate("/markets", "markets", {"event_ticker": event_ticker})]
+    return parse_field_event(event_ticker, tickers).entrants
 
 
 def split_team_blob(blob: str, codes: set[str]) -> tuple[str | None, str | None]:

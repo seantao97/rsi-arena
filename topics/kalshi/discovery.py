@@ -68,7 +68,8 @@ class Discovery:
         for s in self.client.paginate("/series", "series", page_size=200):
             ticker = s.get("ticker", "")
             if ticker:
-                out[ticker] = classify_series(ticker, s.get("title", ""), s.get("category", ""))
+                out[ticker] = classify_series(ticker, s.get("title", ""), s.get("category", ""),
+                                              s.get("tags"), s.get("frequency", ""))
         self._series_cache = out
         return out
 
@@ -78,11 +79,13 @@ class Discovery:
         league: str | None = None,
         market_type: MarketType | str | None = None,
         game_level_only: bool = False,
+        fixtures_only: bool = False,
     ) -> list[SeriesClass]:
         """Sports series, optionally filtered.
 
-        ``game_level_only`` keeps just the series tied to a single fixture —
-        the ones worth joining against live game state.
+        ``fixtures_only`` uses Kalshi's own ``frequency`` field and is the
+        accurate filter for "tied to a single fixture". ``game_level_only``
+        is the older market-type heuristic, kept for callers that want it.
         """
         results = [c for c in self.all_series().values() if c.sport is not Sport.OTHER
                    or c.league not in ("NONSPORT",)]
@@ -97,6 +100,8 @@ class Discovery:
             results = [c for c in results if c.market_type is want_t]
         if game_level_only:
             results = [c for c in results if c.is_game_level]
+        if fixtures_only:
+            results = [c for c in results if c.is_fixture]
         return results
 
     def coverage(self) -> dict[str, dict[str, int]]:
@@ -173,7 +178,8 @@ class Discovery:
         self,
         league: str | None = None,
         sport: Sport | str | None = None,
-        game_level_only: bool = True,
+        game_level_only: bool = False,
+        fixtures_only: bool = True,
         min_liquidity: float = 0.0,
         closing_within_hours: float | None = None,
     ) -> list[MarketRef]:
@@ -183,7 +189,8 @@ class Discovery:
         for the requested scope and returns them classified and filtered.
         """
         series = self.sports_series(sport=sport, league=league,
-                                    game_level_only=game_level_only)
+                                    game_level_only=game_level_only,
+                                    fixtures_only=fixtures_only)
         wanted = {c.ticker for c in series}
         now = datetime.now(timezone.utc)
 
