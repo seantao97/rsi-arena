@@ -26,6 +26,11 @@ API_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 WS_URL = "wss://api.elections.kalshi.com/trade-api/ws/v2"
 WS_PATH = "/trade-api/ws/v2"
 
+# Maximum page size accepted per endpoint. /events and /series reject anything
+# above 200; /markets accepts 1000. Exceeding it is a 400, not a clamp.
+MAX_PAGE_SIZE = {"/events": 200, "/series": 200, "/markets": 1000,
+                 "/markets/trades": 1000}
+
 # Per-second read-token budget by account tier.
 TIER_READ_BUDGET = {
     "basic": 200, "advanced": 300, "expert": 600,
@@ -75,6 +80,15 @@ class KalshiClient:
 
     def __post_init__(self) -> None:
         self._limiter = RateLimiter(TIER_READ_BUDGET.get(self.tier, 200))
+        if self.key_id is None and self.private_key_pem is None:
+            from .credentials import load
+            creds = load()
+            object.__setattr__(self, "key_id", creds.key_id)
+            object.__setattr__(self, "private_key_pem", creds.private_key_pem)
+
+    @property
+    def is_authenticated(self) -> bool:
+        return bool(self.key_id and self.private_key_pem)
 
     # ---------- auth ----------
 
@@ -146,7 +160,7 @@ class KalshiClient:
     ) -> Iterator[dict]:
         """Yield every object from a cursor-paginated list endpoint."""
         params = dict(params or {})
-        params["limit"] = page_size
+        params["limit"] = min(page_size, MAX_PAGE_SIZE.get(path, 200))
         cursor, seen = None, 0
         while True:
             if cursor:

@@ -1,14 +1,18 @@
 # Kalshi sports infrastructure
 
-Data layer for the sports topics. Two questions an agent needs answered, plus a
-collector that records both at high frequency.
+Data layer for the sports topics. The questions an agent needs answered, plus a
+collector that records the answers at high frequency.
 
 | Question | Module |
 |---|---|
 | *What can I bet on?* | [`discovery.py`](discovery.py) — series, events, markets, classified by sport, league and market type |
 | *What is this market worth, now or at 14:03?* | [`quotes.py`](quotes.py) — live quotes, order books, candles, and point-in-time lookup from recorded snapshots |
 | *What is actually happening in the game?* | [`gamestate.py`](gamestate.py) — scores, situation and play-by-play |
+| *Which game is this market about?* | [`linking.py`](linking.py) — parses fixtures out of event tickers and matches them to the game feed |
 | *Record all of it* | [`recorder.py`](recorder.py), [`storage.py`](storage.py) |
+
+Credentials are optional — [`credentials.py`](credentials.py) reads the same
+environment variables the other Kalshi tools in this account already use.
 
 ## Quickstart
 
@@ -62,6 +66,12 @@ Verified against the live exchange on 2026-08-17.
   stems contain hyphens (`KXNFLWINS-KC`). Resolve by longest matching prefix.
 - **Batch quoting works** — `/markets?tickers=a,b,c` takes 100 at a time, so a
   400-market slate costs four calls per tick and sustains 1Hz inside Basic.
+- **Page-size caps differ by endpoint.** `/markets` accepts `limit=1000`;
+  `/events` and `/series` reject anything above 200 with a 400 rather than
+  clamping. `paginate` enforces the right cap per path.
+- **Open-market pagination is not sport-first.** The first several thousand
+  results of `/markets?status=open` contain no sports at all, so sweeping the
+  global list to find them does not work — query by `series_ticker`.
 
 ## Game state sources
 
@@ -86,16 +96,38 @@ hundred rows a second, comfortably inside what SQLite absorbs.
 Tables: `quotes`, `books`, `trades`, `markets`, `game_states`, `plays`, `links`.
 
 `links` is the join table between a Kalshi event and a fixture in the game-state
-feed. Populating it is the one piece of matching logic that is not yet
-automatic — see below.
+feed; `linking.py` fills it — see below.
+
+## Fixture matching
+
+Kalshi writes fixtures into the event ticker with no separator between the team
+codes:
+
+    KXMLBSPREAD-26AUG171910AZBOS       26 Aug 2026, 19:10, AZ at BOS
+    KXWNBAGAME-26AUG19MINGS            19 Aug 2026, MIN at GS
+
+Splitting `AZBOS` needs to know which codes exist, and `MINGS` is MIN+GS rather
+than MI+NGS. Rather than maintain a table per league, `harvest_team_codes`
+reads the codes out of the market tickers under a series — `...-BOS4` is a
+Boston spread line — so the set is always current.
+
+```python
+codes = linking.harvest_team_codes(client, "KXMLBSPREAD")     # 32 codes
+links = linking.link_series(client, "KXMLBSPREAD", "MLB",
+                            lambda lg, d: gamestate.todays_games(lg, d))
+# KXMLBSPREAD-26AUG171910AZBOS -> game 824725  Arizona Diamondbacks @ Boston Red Sox
+```
+
+Matching to the feed is date plus a scored name comparison, since Kalshi's
+codes are its own. Confidence is returned with every link; 0.9 means the code
+is a clean prefix of the team name, 0.7 means it matched on initials.
 
 ## Known gaps
 
-- **Fixture matching.** `links` is defined but nothing fills it. Kalshi encodes
-  fixtures as `KXMLBGAME-26AUG171910AZBOS`; the date and team abbreviations are
-  there, but the abbreviations are Kalshi's own and need a mapping per league.
 - **WebSocket.** `client.ws_auth_headers()` signs the handshake correctly, but
   the `orderbook_delta` consumer is not written. Polling at 1Hz is the current
   path and is enough for everything except true tick reconstruction.
 - **Order book depth at scale.** Books are one call per market, so recording
   them for a full slate is expensive. `--book-depth N` limits it to the top N.
+- **Non-team sports.** Fixture parsing assumes two competitors. Golf, motorsport
+  and tennis draws need their own handling.

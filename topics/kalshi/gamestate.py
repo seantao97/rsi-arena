@@ -30,21 +30,53 @@ MLB_API = "https://statsapi.mlb.com/api/v1"
 NHL_API = "https://api-web.nhle.com/v1"
 ESPN_API = "https://site.api.espn.com/apis/site/v2/sports"
 
-# league -> (espn_sport, espn_league)
+# league -> (espn_sport, espn_league). ESPN covers far more than the big four;
+# these paths were the ones worth wiring for Kalshi's actual sports coverage.
 ESPN_PATHS = {
+    # American
     "NFL": ("football", "nfl"),
     "NCAAF": ("football", "college-football"),
     "NBA": ("basketball", "nba"),
     "WNBA": ("basketball", "wnba"),
     "NCAAB": ("basketball", "mens-college-basketball"),
+    "NHL": ("hockey", "nhl"),
+    "MLB": ("baseball", "mlb"),
+    # Soccer — domestic
     "EPL": ("soccer", "eng.1"),
+    "EFL": ("soccer", "eng.2"),
     "LALIGA": ("soccer", "esp.1"),
     "SERIEA": ("soccer", "ita.1"),
     "BUNDESLIGA": ("soccer", "ger.1"),
     "LIGUE1": ("soccer", "fra.1"),
     "MLS": ("soccer", "usa.1"),
-    "UCL": ("soccer", "uefa.champions"),
     "NWSL": ("soccer", "usa.nwsl"),
+    "BRASILEIRAO": ("soccer", "bra.1"),
+    # Soccer — continental
+    "UCL": ("soccer", "uefa.champions"),
+    "UEFA_OTHER": ("soccer", "uefa.europa"),
+    "INTERNATIONAL": ("soccer", "fifa.world"),
+    "CUP": ("soccer", "eng.fa"),
+    # Individual and other
+    "TENNIS": ("tennis", "atp"),
+    "GOLF": ("golf", "pga"),
+    "COMBAT": ("mma", "ufc"),
+    "MOTORSPORT": ("racing", "f1"),
+    "CRICKET": ("cricket", "league"),
+    "INTLBASKET": ("basketball", "nba"),
+}
+
+# The long tail of world soccer leagues, addressable by ESPN slug directly.
+# Kalshi lumps these under OTHERLEAGUE, so pass the slug explicitly when the
+# specific competition matters.
+SOCCER_SLUGS = {
+    "eredivisie": "ned.1", "primeira": "por.1", "scottish": "sco.1",
+    "belgian": "bel.1", "turkish": "tur.1", "greek": "gre.1",
+    "austrian": "aut.1", "swiss": "sui.1", "danish": "den.1",
+    "norwegian": "nor.1", "swedish": "swe.1", "polish": "pol.1",
+    "argentine": "arg.1", "mexican": "mex.1", "colombian": "col.1",
+    "japanese": "jpn.1", "korean": "kor.1", "australian": "aus.1",
+    "egyptian": "egy.1", "usl": "usa.usl.1", "conference": "uefa.europa.conf",
+    "libertadores": "conmebol.libertadores", "concacaf": "concacaf.champions",
 }
 
 
@@ -195,17 +227,28 @@ def nhl_game_state(game_id: str | int, with_plays: bool = True) -> GameState:
 
 # ---------------------------------------------------------------- ESPN
 
-def espn_scoreboard(league: str, date: str | None = None) -> list[dict]:
+def espn_scoreboard(league: str, date: str | None = None,
+                    espn_slug: str | None = None) -> list[dict]:
     """Today's fixtures for a league, with ESPN event ids."""
-    if league not in ESPN_PATHS:
-        raise ValueError(f"no ESPN path for {league}; add one to ESPN_PATHS")
-    sport, lg = ESPN_PATHS[league]
+    if espn_slug:
+        sport, lg = "soccer", espn_slug
+    elif league in ESPN_PATHS:
+        sport, lg = ESPN_PATHS[league]
+    else:
+        raise ValueError(f"no ESPN path for {league}; add one or pass espn_slug")
     qs = f"?dates={date.replace('-', '')}" if date else ""
     return _get(f"{ESPN_API}/{sport}/{lg}/scoreboard{qs}").get("events", [])
 
 
 def espn_game_state(league: str, event_id: str, with_plays: bool = True) -> GameState:
+    if league not in ESPN_PATHS:
+        raise ValueError(f"no ESPN path for {league}; add one or pass espn_slug")
     sport, lg = ESPN_PATHS[league]
+    return _espn_state_by_slug(sport, lg, event_id, with_plays, league)
+
+
+def _espn_state_by_slug(sport: str, lg: str, event_id: str,
+                        with_plays: bool, league_label: str) -> GameState:
     data = _get(f"{ESPN_API}/{sport}/{lg}/summary?event={event_id}")
     comp = (data.get("header", {}).get("competitions") or [{}])[0]
     competitors = comp.get("competitors", [])
@@ -228,7 +271,7 @@ def espn_game_state(league: str, event_id: str, with_plays: bool = True) -> Game
             ))
 
     return GameState(
-        game_id=str(event_id), league=league, status=status,
+        game_id=str(event_id), league=league_label, status=status,
         home=(home.get("team") or {}).get("displayName", ""),
         away=(away.get("team") or {}).get("displayName", ""),
         home_score=int(home.get("score") or 0),
@@ -244,8 +287,21 @@ def espn_game_state(league: str, event_id: str, with_plays: bool = True) -> Game
 
 # ---------------------------------------------------------------- routing
 
-def game_state(league: str, game_id: str, with_plays: bool = True) -> GameState:
-    """Fetch state for any supported league through one call."""
+def supported_leagues() -> list[str]:
+    """Every league with a live game-state feed."""
+    return sorted(set(ESPN_PATHS) | {"MLB", "NHL"})
+
+
+def game_state(league: str, game_id: str, with_plays: bool = True,
+               espn_slug: str | None = None) -> GameState:
+    """Fetch state for any supported league through one call.
+
+    MLB and NHL use their official feeds, which are richer than ESPN's. Pass
+    ``espn_slug`` to reach a competition not in ``ESPN_PATHS`` — see
+    ``SOCCER_SLUGS`` for the world-league tail.
+    """
+    if espn_slug:
+        return _espn_state_by_slug("soccer", espn_slug, game_id, with_plays, league)
     if league == "MLB":
         return mlb_game_state(game_id, with_plays)
     if league == "NHL":
@@ -253,20 +309,21 @@ def game_state(league: str, game_id: str, with_plays: bool = True) -> GameState:
     return espn_game_state(league, game_id, with_plays)
 
 
-def todays_games(league: str, date: str | None = None) -> list[dict]:
+def todays_games(league: str, date: str | None = None,
+                 espn_slug: str | None = None) -> list[dict]:
     """Fixtures for a league today, normalised to ``{id, home, away, start}``."""
-    if league == "MLB":
+    if league == "MLB" and not espn_slug:
         return [{"id": str(g["gamePk"]),
                  "home": g["teams"]["home"]["team"]["name"],
                  "away": g["teams"]["away"]["team"]["name"],
                  "start": g.get("gameDate", "")} for g in mlb_schedule(date)]
-    if league == "NHL":
+    if league == "NHL" and not espn_slug:
         return [{"id": str(g["id"]),
                  "home": g.get("homeTeam", {}).get("abbrev", ""),
                  "away": g.get("awayTeam", {}).get("abbrev", ""),
                  "start": g.get("startTimeUTC", "")} for g in nhl_schedule(date)]
     out = []
-    for e in espn_scoreboard(league, date):
+    for e in espn_scoreboard(league, date, espn_slug):
         comp = (e.get("competitions") or [{}])[0]
         cs = comp.get("competitors", [])
         h = next((c for c in cs if c.get("homeAway") == "home"), {})
