@@ -41,6 +41,8 @@ what the optimizer discovers. If a topic doc contains a pipeline, it is wrong.
 | [Patent prior art](patent-prior-art.md) | Invalidating references | Immediately | Element coverage, citation validity |
 | [Code review](code-review.md) | Ranked findings on a diff | Immediately | Confirmed findings, false-positive rate |
 | [Tax](tax.md) | Ranked actions | Immediately | Arithmetic and rule validity, modelled savings |
+| [Agent review](agent-review.md) | Diagnose a harness failure | On retest | Confirmed prescriptions, overfit rate |
+| [Trade review](trade-review.md) | Diagnose a settled trade log | Out of sample | Rule performance OOS, synthetic catch rate |
 
 **Consumer**
 
@@ -57,13 +59,14 @@ what the optimizer discovers. If a topic doc contains a pipeline, it is wrong.
 
 ## Verifiable and non-verifiable
 
-Sixteen of the eighteen topics are **verifiable**: either the world produces a number, or a mechanical
+Eighteen of the twenty topics are **verifiable**: either the world produces a number, or a mechanical
 check does. Two are not.
 
 Three kinds of verification are in play, and they differ in cost. Markets and forecasting **settle** —
-you wait. Incident root cause, patent art, code review, tax and purchase are **checked immediately** against an
-injected fault, a publication date, an executed test, a rule table, or a live price — which means
-unlimited volume without waiting for the world.
+you wait. Incident root cause, patent art, code review, tax, purchase, agent review and trade review are
+**checked immediately** against an injected fault, a publication date, an executed test, a rule table,
+a live price, or a held-out slice of the input — which means unlimited volume without waiting for the
+world.
 
 That split is the point of the roster, and it creates a tension worth stating plainly.
 
@@ -92,7 +95,8 @@ orchestration, so harness design has less room. Cheap to run, fast to settle, we
 
 **Research and search topics** — [merger-arb](merger-arb.md), [macro-nowcast](macro-nowcast.md),
 [event-markets](event-markets.md), [earnings](earnings.md), [patent-prior-art](patent-prior-art.md),
-[incident-rootcause](incident-rootcause.md), [code-review](code-review.md), [purchase](purchase.md).
+[incident-rootcause](incident-rootcause.md), [code-review](code-review.md), [purchase](purchase.md),
+[agent-review](agent-review.md), [trade-review](trade-review.md).
 Retrieval, triage and knowing where to look next do the
 work, which is where harness quality actually shows. The last two are the sharpest tests on the roster,
 because in both the entire task is deciding what to examine next.
