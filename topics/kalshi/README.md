@@ -155,11 +155,19 @@ asyncio.run(s.run())
 Needs `pip install websockets` and credentials — Kalshi authenticates the socket
 even for public channels. Polling via `recorder.py` needs neither.
 
+The wire format does not match what the schema names suggest, and all four of
+these were found by running it, not by reading docs:
+
+- `seq` is at the **top level** of the frame, not inside `msg`
+- snapshot levels are `yes_dollars_fp` / `no_dollars_fp` as `[["0.0100","16.00"]]`
+  — dollar strings, not integer cents
+- deltas carry `price_dollars`, `delta_fp`, `side`
+- **`seq` counts per subscription, not per market.** Every market on one `sid`
+  shares the counter, so checking continuity per book reports a desync on
+  almost every delta. It is checked once per frame instead.
+
 ## Known gaps
 
-- **Stream is untested against the live socket.** The sequencing logic is unit
-  tested (snapshot, in-order delta, gap detection, delta-before-snapshot) but
-  no credentials were configured here, so the handshake itself is unverified.
 - **Order book depth at scale.** REST books are one call per market, so
   recording them for a full slate is expensive. Use the stream, or
   `--book-depth N` to cap it.

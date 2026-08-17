@@ -10,6 +10,19 @@ state, then ``orderbook_delta`` messages apply on top. Deltas before the
 snapshot are dropped, because applying them to an empty book yields a book that
 is quietly wrong rather than obviously broken.
 
+Wire format, confirmed against the live socket on 2026-08-17 — it does not
+match what the schema names suggest:
+
+* ``seq`` sits at the **top level** of the frame, not inside ``msg``
+* snapshot levels are ``yes_dollars_fp`` / ``no_dollars_fp``, as
+  ``[["0.0100", "16.00"], ...]`` — dollar strings, not integer cents
+* a delta carries ``price_dollars``, ``delta_fp`` and ``side``
+* the channel is ``ticker``; ``ticker_v2`` is rejected as an unknown channel
+* **``seq`` counts per subscription, not per market.** Every frame on one
+  ``sid`` shares the counter, so a given market sees gaps that are simply
+  other markets' messages. Continuity must be checked at the subscription
+  level; checking it per book reports a desync on essentially every delta.
+
     stream = KalshiStream(["KXMLBGAME-26AUG17STLCIN-CIN"])
     stream.on_book = lambda t, b: print(t, b.best_bid, b.best_ask)
     asyncio.run(stream.run())
@@ -26,43 +39,69 @@ from typing import Callable
 
 from .client import WS_URL, KalshiClient
 
-CHANNELS = ("orderbook_delta", "ticker_v2", "trade")
+CHANNELS = ("orderbook_delta", "ticker", "trade")
+
+
+def _cents(value) -> int:
+    """Dollar string or number to integer cents. ``"0.0100"`` -> 1."""
+    try:
+        return int(round(float(value) * 100))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _levels(raw) -> dict[int, float]:
+    """``[["0.0100", "16.00"], ...]`` to ``{1: 16.0, ...}``."""
+    out: dict[int, float] = {}
+    for entry in raw or []:
+        try:
+            price, size = entry[0], entry[1]
+        except (IndexError, TypeError):
+            continue
+        qty = float(size)
+        if qty > 0:
+            out[_cents(price)] = qty
+    return out
 
 
 @dataclass
 class LiveBook:
     """Local order book, rebuilt from a snapshot plus deltas.
 
-    Levels are ``{price_cents: contracts}`` on each side. Kalshi quotes yes and
-    no separately; a no bid at 40c is a yes offer at 60c.
+    Levels are ``{price_cents: contracts}`` on each side. The wire carries
+    dollar strings; they are normalised to integer cents here so the two sides
+    are directly comparable. Kalshi quotes yes and no separately — a no bid at
+    40c is a yes offer at 60c.
     """
 
     ticker: str
-    yes: dict[int, int] = field(default_factory=dict)
-    no: dict[int, int] = field(default_factory=dict)
+    yes: dict[int, float] = field(default_factory=dict)
+    no: dict[int, float] = field(default_factory=dict)
     seq: int = 0
     synced: bool = False
     updated_at: str = ""
 
-    def apply_snapshot(self, msg: dict) -> None:
-        self.yes = {int(p): int(q) for p, q in (msg.get("yes") or [])}
-        self.no = {int(p): int(q) for p, q in (msg.get("no") or [])}
-        self.seq = int(msg.get("seq", 0))
+    def apply_snapshot(self, msg: dict, seq: int = 0) -> None:
+        self.yes = _levels(msg.get("yes_dollars_fp") or msg.get("yes"))
+        self.no = _levels(msg.get("no_dollars_fp") or msg.get("no"))
+        self.seq = seq
         self.synced = True
         self.updated_at = datetime.now(timezone.utc).isoformat()
 
-    def apply_delta(self, msg: dict) -> bool:
-        """Apply one delta. Returns False if the book is out of sync."""
+    def apply_delta(self, msg: dict, seq: int = 0) -> bool:
+        """Apply one delta. Returns False if this book has no snapshot yet.
+
+        Sequence continuity is not checked here — ``seq`` belongs to the
+        subscription, not the market, so the stream checks it once per frame
+        and marks every book on that subscription desynced if it breaks.
+        """
         if not self.synced:
-            return False
-        seq = int(msg.get("seq", 0))
-        if seq and seq != self.seq + 1:
-            self.synced = False          # gap: caller must resubscribe
             return False
         self.seq = seq or self.seq
         side = self.yes if msg.get("side") == "yes" else self.no
-        price, delta = int(msg.get("price", 0)), int(msg.get("delta", 0))
-        new = side.get(price, 0) + delta
+        price = _cents(msg.get("price_dollars", msg.get("price", 0)))
+        delta = float(msg.get("delta_fp", msg.get("delta", 0)) or 0)
+        new = side.get(price, 0.0) + delta
         if new > 0:
             side[price] = new
         else:
@@ -95,6 +134,7 @@ class KalshiStream:
         self.channels = channels
         self.books: dict[str, LiveBook] = defaultdict(lambda: LiveBook(""))
         self._cmd_id = 0
+        self._sid_seq: dict[int, int] = {}   # subscription-level continuity
 
         # Callbacks — assign to consume. All are optional.
         self.on_book: Callable[[str, LiveBook], None] | None = None
@@ -147,27 +187,41 @@ class KalshiStream:
                 "params": {"channels": [channel], "market_tickers": self.tickers},
             }))
 
+    def _check_sequence(self, sid: int, seq: int) -> bool:
+        """Subscription-level continuity. False means a frame was missed."""
+        if not seq:
+            return True
+        previous = self._sid_seq.get(sid)
+        self._sid_seq[sid] = seq
+        return previous is None or seq == previous + 1
+
     def _handle(self, msg: dict) -> None:
         kind, payload = msg.get("type"), msg.get("msg") or {}
+        seq = int(msg.get("seq") or 0)          # top level, and per subscription
+        sid = int(msg.get("sid") or 0)
         ticker = payload.get("market_ticker") or payload.get("ticker") or ""
+
+        if kind in ("orderbook_snapshot", "orderbook_delta"):
+            if not self._check_sequence(sid, seq):
+                for book in self.books.values():
+                    book.synced = False
+                if self.on_desync:
+                    self.on_desync(ticker)
 
         if kind == "orderbook_snapshot":
             book = self.books.setdefault(ticker, LiveBook(ticker))
             book.ticker = ticker
-            book.apply_snapshot(payload)
+            book.apply_snapshot(payload, seq)
             if self.on_book:
                 self.on_book(ticker, book)
 
         elif kind == "orderbook_delta":
             book = self.books.setdefault(ticker, LiveBook(ticker))
             book.ticker = ticker
-            if book.apply_delta(payload):
-                if self.on_book:
-                    self.on_book(ticker, book)
-            elif self.on_desync:
-                self.on_desync(ticker)
+            if book.apply_delta(payload, seq) and self.on_book:
+                self.on_book(ticker, book)
 
-        elif kind in ("ticker", "ticker_v2") and self.on_ticker:
+        elif kind == "ticker" and self.on_ticker:
             self.on_ticker(ticker, payload)
 
         elif kind == "trade" and self.on_trade:
