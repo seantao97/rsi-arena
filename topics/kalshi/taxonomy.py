@@ -78,6 +78,70 @@ TAG_TO_SPORT = {
 FIXTURE_FREQUENCIES = {"custom", "daily", "weekly"}
 
 
+
+# Soccer competitions keyed by ticker stem, each with the ESPN slug that serves
+# it. Every slug here was validated against the live ESPN scoreboard endpoint on
+# 2026-08-17; four candidates (Korean, Egyptian, Polish and Canadian top flights)
+# were dropped because ESPN genuinely does not carry them.
+#
+# Matched by prefix, not regex. Ticker stems are concatenated words, so a
+# pattern like ``\bMLS\b`` never fires on ``MLSGAME`` — the trailing word
+# boundary has nothing to match against.
+SOCCER_COMPETITIONS: dict[str, tuple[str, str]] = {
+    # England
+    "EPL": ("EPL", "eng.1"), "FACUP": ("FA_CUP", "eng.fa"),
+    "EFLCUP": ("EFL_CUP", "eng.league_cup"), "ENGCS": ("ENG_SHIELD", "eng.charity"),
+    "EFL": ("EFL", "eng.2"),
+    # Spain, Italy, Germany, France
+    "LALIGA": ("LALIGA", "esp.1"), "COPADELREY": ("COPA_DEL_REY", "esp.copa_del_rey"),
+    "SERIEA": ("SERIEA", "ita.1"), "SERIEB": ("SERIEB", "ita.2"),
+    "COPPAITALIA": ("COPPA_ITALIA", "ita.coppa_italia"),
+    "BUNDESLIGA": ("BUNDESLIGA", "ger.1"), "DFBPOKAL": ("DFB_POKAL", "ger.dfb_pokal"),
+    "LIGUE1": ("LIGUE1", "fra.1"), "COUPEDEFRANCE": ("COUPE_DE_FRANCE", "fra.coupe_de_france"),
+    # UEFA
+    "UCLW": ("UCL_W", "uefa.wchampions"), "UCL": ("UCL", "uefa.champions"),
+    "UEL": ("UEL", "uefa.europa"), "UECL": ("UECL", "uefa.europa.conf"),
+    "UEFASC": ("UEFA_SUPERCUP", "uefa.super_cup"), "UEFANL": ("UEFA_NATIONS", "uefa.nations"),
+    # Americas
+    "MLS": ("MLS", "usa.1"), "NWSL": ("NWSL", "usa.nwsl"),
+    "USLCUP": ("US_OPEN_CUP", "usa.open"), "USL": ("USL", "usa.usl.1"),
+    "LIGAEXP": ("LIGA_EXPANSION", "mex.2"), "LIGAMX": ("LIGAMX", "mex.1"),
+    "BRASILEIRAOB": ("BRASILEIRAO_B", "bra.2"), "BRASILEIRO": ("BRASILEIRAO", "bra.1"),
+    "ARGPREMDIV": ("ARGENTINA", "arg.1"), "URYPD": ("URUGUAY", "uru.1"),
+    "CHILEAN": ("CHILE", "chi.1"), "COLOMBIAN": ("COLOMBIA", "col.1"),
+    "DIMAYOR": ("COLOMBIA", "col.1"), "PERLIGA1": ("PERU", "per.1"),
+    "ECULP": ("ECUADOR", "ecu.1"), "VENFUTVE": ("VENEZUELA", "ven.1"),
+    "CONMEBOLLIB": ("LIBERTADORES", "conmebol.libertadores"),
+    "CONMEBOLSUD": ("SUDAMERICANA", "conmebol.sudamericana"),
+    "CONCACAFCL": ("CONCACAF_CL", "concacaf.champions"),
+    "LEAGUESCUP": ("LEAGUES_CUP", "concacaf.leagues.cup"),
+    # Rest of Europe
+    "EREDIVISIE": ("EREDIVISIE", "ned.1"), "KNVBCUP": ("KNVB_CUP", "ned.cup"),
+    "LIGAPORTUGAL": ("PRIMEIRA", "por.1"), "SCOTTISHPREM": ("SCOTTISH", "sco.1"),
+    "BELGIANPL": ("BELGIUM", "bel.1"), "SUPERLIG": ("TURKEY", "tur.1"),
+    "SLGREECE": ("GREECE", "gre.1"), "SWISSLEAGUE": ("SWITZERLAND", "sui.1"),
+    "AUSTRIANBL": ("AUSTRIA", "aut.1"), "DENSUPERLIGA": ("DENMARK", "den.1"),
+    "ALLSVENSKAN": ("SWEDEN", "swe.1"), "ELITESERIEN": ("NORWAY", "nor.1"),
+    # Asia, Africa, Oceania
+    "JLEAGUE": ("JLEAGUE", "jpn.1"), "CHNSL": ("CHINA", "chn.1"),
+    "SAUDIPL": ("SAUDI", "ksa.1"), "THAIL1": ("THAILAND", "tha.1"),
+    "INDIANSL": ("INDIA", "ind.1"), "ALEAGUE": ("A_LEAGUE", "aus.1"),
+    "AFCCL": ("AFC_CL", "afc.champions"), "AFCAC": ("AFC_CL", "afc.champions"),
+    "AFCON": ("AFCON", "caf.nations"), "FIFAW": ("FIFA_WWC", "fifa.wwc"),
+}
+
+# Longest stem first, so LIGAMX is not shadowed by LIGA-prefixed neighbours.
+_COMPETITION_ORDER = sorted(SOCCER_COMPETITIONS, key=len, reverse=True)
+
+
+def match_competition(stem: str) -> tuple[str, str] | None:
+    """Resolve a ticker stem to ``(league, espn_slug)`` by longest prefix."""
+    for key in _COMPETITION_ORDER:
+        if stem.startswith(key):
+            return SOCCER_COMPETITIONS[key]
+    return None
+
+
 # League detection. Order matters — longer, more specific stems first.
 _LEAGUE_PATTERNS: list[tuple[str, str, Sport]] = [
     # American football
@@ -87,7 +151,7 @@ _LEAGUE_PATTERNS: list[tuple[str, str, Sport]] = [
     (r"\bWNBA", "WNBA", Sport.BASKETBALL),
     (r"\bNCAAM?B|NCAAW?B|MARMAD|CBB", "NCAAB", Sport.BASKETBALL),
     (r"\bNBA", "NBA", Sport.BASKETBALL),
-    (r"\bEUROLEAGUE|\bDBB|\bVBA\b", "INTLBASKET", Sport.BASKETBALL),
+    (r"\bEUROLEAGUE|\bDBB|\bVBA", "INTLBASKET", Sport.BASKETBALL),
     # Baseball
     (r"\bMLB|\bNLGAME|\bALGAME|\bNL[A-Z]*WEST|\bAL[A-Z]*WEST|WORLDSERIES", "MLB", Sport.BASEBALL),
     (r"\bKBO|\bNPB", "INTLBASEBALL", Sport.BASEBALL),
@@ -99,7 +163,7 @@ _LEAGUE_PATTERNS: list[tuple[str, str, Sport]] = [
     (r"\bSERIEA", "SERIEA", Sport.SOCCER),
     (r"\bBUNDESLIGA", "BUNDESLIGA", Sport.SOCCER),
     (r"\bLIGUE1|FRALIGUE", "LIGUE1", Sport.SOCCER),
-    (r"\bMLS\b", "MLS", Sport.SOCCER),
+    (r"\bMLS", "MLS", Sport.SOCCER),
     (r"\bNWSL", "NWSL", Sport.SOCCER),
     (r"\bEFL|CHAMPIONSHIP1H", "EFL", Sport.SOCCER),
     (r"\bBRASILEIRO|COPADOBRAS", "BRASILEIRAO", Sport.SOCCER),
@@ -122,10 +186,10 @@ _LEAGUE_PATTERNS: list[tuple[str, str, Sport]] = [
      r"|AUSOPEN|ROLANDGARROS", "TENNIS", Sport.TENNIS),
     (r"\bPGA|LIVGOLF|DPWORLDTOU|RYDERCUP|MASTERS", "GOLF", Sport.GOLF),
     (r"\bUFC|\bBOXING|\bMMA", "COMBAT", Sport.COMBAT),
-    (r"\bF1\b|FORMULA|NASCAR|MOTOGP|INDYCAR|LEMANS|WRC\b", "MOTORSPORT", Sport.MOTORSPORT),
+    (r"\bF1|FORMULA|NASCAR|MOTOGP|INDYCAR|LEMANS|WRC\b", "MOTORSPORT", Sport.MOTORSPORT),
     (r"VALORANT|\bLOL\b|\bCSGO|\bCS2\b|\bDOTA|ESPORT|\bESL[A-Z]*|OVERWATCH"
      r"|ROCKETLEAGUE|APEX", "ESPORTS", Sport.ESPORTS),
-    (r"\bIPL\b|CRICKET|\bT20\b|\bBBL\b|TESTMATCH", "CRICKET", Sport.CRICKET),
+    (r"\bIPL|CRICKET|\bT20|\bBBL|TESTMATCH", "CRICKET", Sport.CRICKET),
     (r"\bPDC|DARTS", "DARTS", Sport.DARTS),
     (r"\bCHESS", "CHESS", Sport.CHESS),
     (r"OLYMPIC|WINTERGAMES|SUMMERGAMES|PARALYMP", "OLYMPICS", Sport.OLYMPICS),
@@ -141,18 +205,17 @@ _TYPE_PATTERNS: list[tuple[str, MarketType]] = [
     (r"TEAMTOTAL|TEAM TOTAL", MarketType.TEAM_TOTAL),
     (r"TOTAL|OVERUNDER|ROUNDS|MAPS|POINT TOTAL|OVER/UNDER", MarketType.TOTAL),
     (r"SPREAD|HANDICAP|MARGIN", MarketType.SPREAD),
-    (r"\bBTTS\b|BOTH TEAMS", MarketType.BTTS),
+    (r"BTTS|BOTH TEAMS", MarketType.BTTS),
     (r"WINS$|SEASONR|REGSEASON|WINTOTAL", MarketType.SEASON_WINS),
     (r"ADVANCE|QUALIF|MAKEPLAYOFF|SEED|TO REACH|KNOCKOUT", MarketType.QUALIFY),
-    (r"CHAMP|TITLE|\bCUP\b|TOP ?\d*|LEADER|FINALS|DIVISION|CONFERENCE"
+    (r"CHAMP|TITLE|CUP|TOP ?\d*|LEADER|FINALS|DIVISION|CONFERENCE"
      r"|\b(AL|NL)(EAST|WEST|CENTRAL)\b|SEASON WINNER|WIN THE", MarketType.CHAMPIONSHIP),
     (r"MVP|MOTY|COMEBACK|ALLSTAR|ROTY|AWARD|GOLDGLOVE", MarketType.AWARD),
     (r"DRAFT", MarketType.DRAFT),
     (r"TRANSFER|NEXTMANAGE|NEXTTEAM|COACHON|NEXT TEAM|NEXT MANAGER", MarketType.TRANSFER),
     (r"3PT|GOAL|FIRSTTD|RSHYDS|PASSYDS|RECYDS|STRIKEOUT|\bHR\b|\bSB\b"
      r"|POINTS|ASSISTS|REBOUND|SAVES|PLAYER|SCORER|HRDERBY", MarketType.PLAYER_PROP),
-    (r"GAME$|GAME[A-Z]*$|MONEYLINE|GAME WINNER|\bGAME\b|\bMATCH\b|WINNER",
-     MarketType.GAME_WINNER),
+    (r"GAME|MONEYLINE|MATCH|WINNER", MarketType.GAME_WINNER),
 ]
 
 
@@ -167,6 +230,7 @@ class SeriesClass:
     title: str = ""
     frequency: str = ""
     sport_source: str = "regex"   # "tag" when it came from Kalshi's own field
+    espn_slug: str = ""           # set when a game-state feed is known
 
     @property
     def is_fixture(self) -> bool:
@@ -212,7 +276,7 @@ def classify_series(ticker: str, title: str = "", category: str = "",
                            title, frequency, "category")
 
     stem = _strip_prefix(ticker).upper()
-    hay = f"{stem} {title.upper()}"
+    hay = f"{stem} {title.upper()}".strip()
 
     # Kalshi's tag is authoritative for sport when present.
     tag_sport = None
@@ -222,8 +286,14 @@ def classify_series(ticker: str, title: str = "", category: str = "",
             tag_sport = hit
             break
 
-    sport, league = Sport.OTHER, "UNKNOWN"
-    for pattern, lg, sp in _LEAGUE_PATTERNS:
+    sport, league, slug = Sport.OTHER, "UNKNOWN", ""
+
+    competition = match_competition(stem)
+    if competition:
+        league, slug = competition
+        sport = Sport.SOCCER
+
+    for pattern, lg, sp in ([] if competition else _LEAGUE_PATTERNS):
         if re.search(pattern, hay):
             sport, league = sp, lg
             break
@@ -243,12 +313,14 @@ def classify_series(ticker: str, title: str = "", category: str = "",
 
     market_type = MarketType.OTHER
     for pattern, mt in _TYPE_PATTERNS:
-        if re.search(pattern, hay):
+        # Match the ticker stem and the title separately: the stem is
+        # concatenated words, so word-boundary anchors only work on the title.
+        if re.search(pattern, stem) or re.search(pattern, title.upper()):
             market_type = mt
             break
 
     return SeriesClass(ticker, sport, league, market_type, title,
-                       frequency, sport_source)
+                       frequency, sport_source, slug)
 
 
 def _generic_league(sport: Sport, current: str) -> str:

@@ -14,11 +14,17 @@ Sources, all free and keyless as of 2026-08-17:
 ESPN is undocumented, so treat a schema change as expected rather than
 exceptional. Every adapter returns the same ``GameState`` so a caller does not
 care which one answered.
+
+**ESPN throttles concurrency.** Twelve parallel requests returned errors for
+every slug, including ones that work fine serially. Requests are paced through
+a shared limiter here; do not fan out around it.
 """
 
 from __future__ import annotations
 
 import json
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -119,8 +125,19 @@ class GameState:
         return asdict(self)
 
 
-def _get(url: str, timeout: int = 20) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": "rsi-arena/1.0"})
+_ESPN_LOCK = threading.Lock()
+_ESPN_LAST = [0.0]
+_ESPN_MIN_INTERVAL = 0.25       # 4/s; higher rates get refused
+
+
+def _get(url: str, timeout: int = 20, throttle: bool = False) -> dict:
+    if throttle:
+        with _ESPN_LOCK:
+            wait = _ESPN_MIN_INTERVAL - (time.monotonic() - _ESPN_LAST[0])
+            if wait > 0:
+                time.sleep(wait)
+            _ESPN_LAST[0] = time.monotonic()
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())
 
@@ -237,7 +254,7 @@ def espn_scoreboard(league: str, date: str | None = None,
     else:
         raise ValueError(f"no ESPN path for {league}; add one or pass espn_slug")
     qs = f"?dates={date.replace('-', '')}" if date else ""
-    return _get(f"{ESPN_API}/{sport}/{lg}/scoreboard{qs}").get("events", [])
+    return _get(f"{ESPN_API}/{sport}/{lg}/scoreboard{qs}", throttle=True).get("events", [])
 
 
 def espn_game_state(league: str, event_id: str, with_plays: bool = True) -> GameState:
@@ -249,7 +266,7 @@ def espn_game_state(league: str, event_id: str, with_plays: bool = True) -> Game
 
 def _espn_state_by_slug(sport: str, lg: str, event_id: str,
                         with_plays: bool, league_label: str) -> GameState:
-    data = _get(f"{ESPN_API}/{sport}/{lg}/summary?event={event_id}")
+    data = _get(f"{ESPN_API}/{sport}/{lg}/summary?event={event_id}", throttle=True)
     comp = (data.get("header", {}).get("competitions") or [{}])[0]
     competitors = comp.get("competitors", [])
     home = next((c for c in competitors if c.get("homeAway") == "home"), {})
@@ -286,6 +303,22 @@ def _espn_state_by_slug(sport: str, lg: str, event_id: str,
 
 
 # ---------------------------------------------------------------- routing
+
+def for_series(series_class, game_id: str, with_plays: bool = True) -> GameState:
+    """Fetch state for a market's fixture, routing on the series classification.
+
+    Uses ``SeriesClass.espn_slug`` when the taxonomy resolved one — that is what
+    covers the world-soccer tail that has no entry in ``ESPN_PATHS``.
+    """
+    slug = getattr(series_class, "espn_slug", "") or None
+    return game_state(series_class.league, game_id, with_plays, espn_slug=slug)
+
+
+def fixtures_for_series(series_class, date: str | None = None) -> list[dict]:
+    """Today's fixtures for whatever competition a series covers."""
+    slug = getattr(series_class, "espn_slug", "") or None
+    return todays_games(series_class.league, date, espn_slug=slug)
+
 
 def supported_leagues() -> list[str]:
     """Every league with a live game-state feed."""

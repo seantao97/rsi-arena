@@ -86,7 +86,24 @@ All free and keyless as of 2026-08-17.
 |---|---|---|
 | MLB | `statsapi.mlb.com` (official) | Full play-by-play, pitch level, count, runners, current pitcher and batter |
 | NHL | `api-web.nhle.com` (official) | Play-by-play, shifts |
-| NFL, NBA, WNBA, NCAA, major soccer | ESPN public endpoints | Scores, situation, play-by-play |
+| NFL, NBA, WNBA, NCAA | ESPN public endpoints | Scores, situation, play-by-play |
+| 51 soccer competitions | ESPN, by validated slug | Scores, events, lineups |
+
+`taxonomy.SOCCER_COMPETITIONS` maps ticker stems to ESPN slugs, and every slug
+was checked against the live scoreboard endpoint. Routing is automatic:
+
+```python
+gamestate.fixtures_for_series(series_class)          # picks the slug
+gamestate.for_series(series_class, game_id)
+```
+
+**ESPN throttles concurrency.** Twelve parallel requests failed for every slug,
+including ones that work serially — requests are paced at 4/s through a shared
+limiter. Do not fan out around it.
+
+Coverage: **77% of fixture-level series** have a game-state feed. The remainder
+is esports, Olympics, chess and four soccer leagues ESPN does not carry
+(Korean, Egyptian, Polish, Canadian).
 
 ESPN is undocumented. It has been stable for years but treat a schema change as
 expected rather than exceptional — every adapter normalises to the same
