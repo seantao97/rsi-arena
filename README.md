@@ -96,9 +96,74 @@ Things this design has not settled, listed honestly:
 - **Adversarial voting.** Anything with a leaderboard attracts vote manipulation.
 - **Trace visibility.** Showing traces makes votes better informed but also biases users toward agents that *look* thorough.
 
+## Running it
+
+The [runtime](rsi_arena/) is built: the layer agents are made of. The arena itself — battles,
+votes, ratings, the optimizer loop — is not.
+
+```bash
+git clone https://github.com/Helpigent/rsi-arena && cd rsi-arena
+pip install -e .                         # httpx and pydantic, nothing else
+
+export OPENROUTER_API_KEY=sk-or-...      # every model goes through OpenRouter
+export SEARCHAPI_API_KEY=...             # optional: Google search for the research agents
+```
+
+Three sample agents ship with it. They answer the same question, on the same model, with the
+same tools and the same cost ceiling, and differ **only in orchestration** — which is the
+comparison the whole project is about:
+
+```bash
+python examples/web_research.py "Did the ECB cut rates in July 2026?" --agent all --trace
+```
+
+| Agent | Orchestration |
+|---|---|
+| `pipeline` | Fixed order: plan queries → *(search → take notes)* until sufficient → draft → critique. The plan decides what runs. |
+| `freeform` | One prompt, the same two search tools, a budget of eight tool calls. The model decides what runs, in what order, how many times. |
+| `plugin` | No search tool at all — OpenRouter's `web` plugin retrieves inside the model call. |
+
+And the three-step one, for checking the plumbing in a few seconds and a fraction of a cent:
+
+```bash
+python examples/smoke_test.py "How many piano tuners are there in Chicago?" --trace
+```
+
+Every run returns an `AgentResult`: the answer, the final state, the full span tree, and the
+cost ledger — one JSON object holding both what a voter needs to see and what the optimizer
+needs to read.
+
+```
+trace 5b33cd140c51 agent='researcher-pipeline' 34.21s $0.19500 (6 calls)
+✓ researcher-pipeline (agent) 34.21s
+  ✓ plan_queries (step) 3.10s
+    ✓ llm (llm) 3.10s $0.00310
+  ✓ research (loop) 19.44s
+    ✓ iteration 1 (iteration) 19.44s
+      ✓ choose_query (step) 1.02s
+      ✓ search (step) 0.83s
+        ✓ search (tool) 0.83s $0.00400
+      ✓ take_notes (step) 8.31s
+  ✓ draft (step) 7.20s
+  ✓ critique (step) 4.47s
+```
+
+Neither test needs a key or a network — both run against a fake OpenRouter:
+
+```bash
+python tests/test_end_to_end.py     # the runtime
+python tests/test_examples.py       # the sample agents
+```
+
+See [`rsi_arena/README.md`](rsi_arena/README.md) for how to write an agent, add a step type, or
+register a new API.
+
 ## Status
 
-Early. This README describes the intended design; the implementation is not built yet.
+Early. The runtime in [`rsi_arena/`](rsi_arena/) runs, with sample agents and offline tests.
+The [topics](topics/) are specified and the Kalshi data layer for the sports and market topics
+is built. The arena — battles, votes, ratings, and the optimizer that rewrites losing harnesses
+— is described here and not yet implemented.
 
 ## License
 
