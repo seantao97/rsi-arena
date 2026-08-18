@@ -101,37 +101,140 @@ Things this design has not settled, listed honestly:
 The [runtime](rsi_arena/) is built: the layer agents are made of. The arena itself — battles,
 votes, ratings, the optimizer loop — is not.
 
+### 1. Install
+
+Python 3.10 or newer. Two dependencies, `httpx` and `pydantic`.
+
 ```bash
 git clone https://github.com/Helpigent/rsi-arena && cd rsi-arena
-pip install -e .                         # httpx and pydantic, nothing else
 
-export OPENROUTER_API_KEY=sk-or-...      # every model goes through OpenRouter
-export SEARCHAPI_API_KEY=...             # optional: Google search for the research agents
+python3 -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+pip install -e .
 ```
 
-Three sample agents ship with it. They answer the same question, on the same model, with the
-same tools and the same cost ceiling, and differ **only in orchestration** — which is the
-comparison the whole project is about:
+`pip install -r requirements.txt` works too if you would rather not install the package; then
+run everything from the repo root, which the example scripts already assume.
+
+### 2. Check it works, before spending anything
+
+Both test files run against a fake OpenRouter and a fake SearchApi built on
+`httpx.MockTransport`. No key, no network, no cost — so run these first and know the failure is
+yours rather than ours.
+
+```bash
+python tests/test_end_to_end.py     # the runtime
+python tests/test_examples.py       # the three sample agents
+```
+
+```
+1. retries+cost           ok (attempts=3, $0.0012)
+2. cache + single-flight  ok (1 wire call for 20 parallel, {'entries': 2, 'hits': 19, 'misses': 2})
+3. structured output      ok (Answer(answer='42', confidence=0.9))
+4. streaming (+replay)    ok ('hello', $0.0003)
+5. api + cache + cost     ok ($0.004 then $0.0 cached)
+6. agent run              ok
+7. agent/trace JSON       ok (agent round-trips, trace serialises)
+8. budget ceiling         ok (BudgetExceeded: budget exceeded: llm:test/model would take spend
+   to $0.0012 of $0.0001)
+all checks passed
+```
+
+### 3. Keys
+
+| Variable | Needed for | Where |
+|---|---|---|
+| `OPENROUTER_API_KEY` | Every model call | [openrouter.ai/keys](https://openrouter.ai/keys) |
+| `SEARCHAPI_API_KEY` | `--agent pipeline` and `--agent freeform` | [searchapi.io](https://www.searchapi.io/) |
+| `OPENROUTER_APP_URL` | Optional. Sent as `HTTP-Referer`, which lists the app on OpenRouter | — |
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+export SEARCHAPI_API_KEY=...
+```
+
+Only `OPENROUTER_API_KEY` is required. `--agent plugin` needs no search key — OpenRouter's `web`
+plugin does the retrieval — so it is the one to try if you only have the one key. A missing key
+fails immediately with the variable name in the message, rather than as a 401 twenty seconds in.
+
+### 4. The smoke test agent
+
+Three steps — decompose, compute, write up. A few seconds and well under a cent. Run this before
+the research agents; if it works, the plumbing works.
+
+```bash
+python examples/smoke_test.py "How many piano tuners are there in Chicago?"
+```
+
+```
+fermi [anthropic/claude-sonnet-4.5]
+tools: calculator
+decompose (prompt)
+compute (tool)
+write_up (prompt)
+
+About 130 piano tuners. Chicago has ~2.7M people, ~1 piano per 40 households…
+------------------------------------------------------------
+{
+  "agent": "fermi",
+  "run_id": "9f2c41b7de03",
+  "ok": true,
+  "error": null,
+  "duration_s": 11.4,
+  "total_usd": 0.0184,
+  "calls": 2,
+  "cached_calls": 0,
+  "by_kind": { "llm": 0.0184 },
+  "by_name": { "anthropic/claude-sonnet-4.5": 0.0184 },
+  "usage": { "prompt_tokens": 1832, "completion_tokens": 604, "reasoning_tokens": 0, ... }
+}
+```
+
+Run it twice and the second run is free: identical requests are served from the cache, and the
+ledger shows them at `$0` with `cached_calls` counting them rather than dropping them.
+
+| Flag | Does |
+|---|---|
+| `--model` | Any OpenRouter slug. Default `anthropic/claude-sonnet-4.5` |
+| `--trace` | Print the span tree — every step, its timing and its cost |
+| `--json PATH` | Write the whole `AgentResult` (answer, state, trace, ledger) to a file |
+
+### 5. The research agents
+
+Three agents, one question, same model, same tools, same cost ceiling. They differ **only in
+orchestration**, which is the comparison the whole project is about:
 
 ```bash
 python examples/web_research.py "Did the ECB cut rates in July 2026?" --agent all --trace
 ```
 
-| Agent | Orchestration |
+| Agent | Orchestration | Needs |
+|---|---|---|
+| `pipeline` | Fixed order: plan queries → *(search → take notes)* until sufficient → draft → critique. The plan decides what runs. | Both keys |
+| `freeform` | One prompt, the same two search tools, a budget of eight tool calls. The model decides what runs, in what order, and how many times. | Both keys |
+| `plugin` | No search tool at all — OpenRouter's `web` plugin retrieves inside the model call. | OpenRouter only |
+
+`--agent all` runs the three concurrently against one shared client, so they share a rate limiter
+and a cache and a repeated search is paid for once. That sharing is also what makes an arena
+battle fair.
+
+| Flag | Does |
 |---|---|
-| `pipeline` | Fixed order: plan queries → *(search → take notes)* until sufficient → draft → critique. The plan decides what runs. |
-| `freeform` | One prompt, the same two search tools, a budget of eight tool calls. The model decides what runs, in what order, how many times. |
-| `plugin` | No search tool at all — OpenRouter's `web` plugin retrieves inside the model call. |
+| `--agent {pipeline,freeform,plugin,all}` | Which to run. Default `pipeline` |
+| `--model` | Any OpenRouter slug, applied to every agent |
+| `--max-usd` | Per-agent ceiling, default `$2.00`. Both sides of a battle get the same one |
+| `--trace` | Print each agent's span tree |
+| `--stream` | Stream the first step's tokens instead of running the plan — what a live UI renders |
+| `--json PATH` | Write every result as JSON |
 
-And the three-step one, for checking the plumbing in a few seconds and a fraction of a cent:
+Expect roughly $0.05–$0.30 per research agent per question, depending on model and how much it
+searches. `--max-usd` is enforced: over the ceiling the run stops and returns its partial trace
+rather than queueing.
 
-```bash
-python examples/smoke_test.py "How many piano tuners are there in Chicago?" --trace
-```
+### 6. What comes back
 
-Every run returns an `AgentResult`: the answer, the final state, the full span tree, and the
-cost ledger — one JSON object holding both what a voter needs to see and what the optimizer
-needs to read.
+Every run returns an `AgentResult` — the answer, the final state, the full span tree and the cost
+ledger — as one JSON object, holding both what a voter needs to see and what the optimizer needs
+to read. `--trace` renders the tree:
 
 ```
 trace 5b33cd140c51 agent='researcher-pipeline' 34.21s $0.19500 (6 calls)
@@ -148,15 +251,48 @@ trace 5b33cd140c51 agent='researcher-pipeline' 34.21s $0.19500 (6 calls)
   ✓ critique (step) 4.47s
 ```
 
-Neither test needs a key or a network — both run against a fake OpenRouter:
+### 7. Your own agent
 
-```bash
-python tests/test_end_to_end.py     # the runtime
-python tests/test_examples.py       # the sample agents
+An agent is a context, a plan and a set of tools. In full:
+
+```python
+import asyncio
+from rsi_arena import Agent, AgentConfig, Plan, PromptStep, ToolStep, Toolbox, api_tool
+from rsi_arena.apis import SEARCHAPI
+
+agent = Agent(
+    name="researcher",
+    context="You are a research agent. Every claim carries the URL it came from.",
+    tools=Toolbox([api_tool(SEARCHAPI, "search", name="search")]),
+    config=AgentConfig(default_model="anthropic/claude-sonnet-4.5", max_usd=0.50),
+    plan=Plan(steps=[
+        ToolStep(name="search", tool="search", args={"q": "{{question}}"}, output_key="hits"),
+        PromptStep(name="write", prompt="Answer {{question}} from:\n{{hits}}"),
+    ]),
+)
+
+result = asyncio.run(agent.run("Did the ECB cut rates in July 2026?"))
+print(result.output)
+print(result.trace.render())
 ```
 
-See [`rsi_arena/README.md`](rsi_arena/README.md) for how to write an agent, add a step type, or
-register a new API.
+Swapping that `ToolStep` for `PromptStep(tools=["*"])` turns the same primitives into a free-form
+agent. That one field is the difference the arena measures.
+
+[`rsi_arena/README.md`](rsi_arena/README.md) covers the step types, the loop stopping conditions,
+and how to register a new API — which is one `APISpec` literal and no client code.
+
+### Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `OPENROUTER_API_KEY is not set in the environment` | Exported in a different shell, or the venv is not active |
+| `searchapi needs SEARCHAPI_API_KEY in the environment` | Use `--agent plugin`, which needs no search key |
+| `[402] ...` | Out of OpenRouter credits. Not retried — no amount of waiting adds credits |
+| `[503] no available model provider` | Structured-output steps set `provider.require_parameters`, so a model whose endpoints do not support `json_schema` routes nowhere. Pick another `--model` |
+| `[429]` in the trace's `retries` | Normal. Backed off and retried; the `Retry-After` header pauses every in-flight call, not just the one that lost |
+| `ModuleNotFoundError: rsi_arena` | Run from the repo root, or `pip install -e .` |
+| A run costs more than expected | `--trace` breaks cost down per step; `result.trace.costs.summary()` breaks it down by kind and by name |
 
 ## Status
 
