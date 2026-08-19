@@ -15,6 +15,7 @@ exactly the case ``Endpoint.defaults`` exists for.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from ..api import APISpec, BearerAuth, Endpoint, Param, register_api
@@ -87,7 +88,9 @@ _COMMON = (
 SEARCHAPI = register_api(
     APISpec(
         name="searchapi",
-        base_url="https://www.searchapi.io/api/v1",
+        # Overridable so the stack can be pointed at the local fake in
+        # ``tests/fake_openrouter.py`` and demonstrated without a key.
+        base_url=os.environ.get("SEARCHAPI_BASE_URL", "https://www.searchapi.io/api/v1"),
         description="Google search, news and scholar results via SearchApi.io.",
         auth=BearerAuth(env_var="SEARCHAPI_API_KEY"),
         # Their plans are quota-based rather than rate-limited, so this is a

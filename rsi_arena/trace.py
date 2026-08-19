@@ -22,7 +22,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from typing import Any, AsyncIterator, Iterator, Literal
+from typing import Any, AsyncIterator, Callable, Iterator, Literal
 
 from pydantic import BaseModel, Field
 
@@ -151,10 +151,29 @@ class Tracer:
     that never sees the tracer still nests correctly.
     """
 
-    def __init__(self, agent: str = "", costs: CostTracker | None = None) -> None:
+    def __init__(
+        self,
+        agent: str = "",
+        costs: CostTracker | None = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         root = Span(name=agent or "run", kind="agent")
         self.trace = Trace(agent=agent, root=root, costs=costs or CostTracker())
         self._token = _current_span.set(root)
+        # Live subscribers — the web UI draws the tree as it fills in rather
+        # than after the run. Kept synchronous so a listener can be a plain
+        # ``queue.put_nowait``; anything slower belongs on the other side of
+        # that queue, not here.
+        self.on_event = on_event
+
+    def emit(self, type: str, **payload: Any) -> None:
+        """Notify the listener. A broken listener must never fail a run."""
+        if self.on_event is None:
+            return
+        try:
+            self.on_event({"type": type, "run_id": self.trace.run_id, **payload})
+        except Exception:  # noqa: BLE001 - telemetry is never load-bearing
+            pass
 
     @property
     def root(self) -> Span:
@@ -194,17 +213,20 @@ class Tracer:
         if attributes:
             span.annotate(**attributes)
         with self._attach(span):
+            self.emit("span_start", span=_span_event(span))
             try:
                 yield span
             except BaseException as exc:  # noqa: BLE001 - recorded then re-raised
                 span.status = "error"
                 span.error = f"{type(exc).__name__}: {exc}"
                 span.ended_at = time.time()
+                self.emit("span_end", span=_span_event(span))
                 raise
             else:
                 if span.status == "running":
                     span.status = "ok"
                 span.ended_at = time.time()
+                self.emit("span_end", span=_span_event(span))
 
     def record_cost(self, kind: str, name: str, cost: Cost, span: Span | None = None) -> None:
         """Attach a cost to a span *and* to the run ledger.
@@ -216,6 +238,16 @@ class Tracer:
         target = span or self.current()
         target.cost = cost
         self.costs.add(kind, name, cost, span_id=target.id)
+        self.emit(
+            "cost",
+            span_id=target.id,
+            kind=kind,
+            name=name,
+            usd=cost.usd,
+            cached=cost.cached,
+            total_usd=self.costs.total_usd,
+            calls=self.costs.calls,
+        )
 
     def finish(self, output: Any = None, error: BaseException | None = None) -> Trace:
         if output is not None:
@@ -227,11 +259,31 @@ class Tracer:
             self.root.status = "ok"
         self.root.ended_at = time.time()
         self.trace.ended_at = self.root.ended_at
+        self.emit("span_end", span=_span_event(self.root))
         try:
             _current_span.reset(self._token)
         except ValueError:
             _current_span.set(None)
         return self.trace
+
+
+def _span_event(span: Span) -> dict[str, Any]:
+    """The parts of a span a live listener needs — never the full subtree."""
+    return {
+        "id": span.id,
+        "parent_id": span.parent_id,
+        "name": span.name,
+        "kind": span.kind,
+        "status": span.status,
+        "started_at": span.started_at,
+        "ended_at": span.ended_at,
+        "duration_s": round(span.duration_s, 3),
+        "error": span.error,
+        "cost_usd": span.cost.usd if span.cost else 0.0,
+        "cached": bool(span.cost and span.cost.cached),
+        "attributes": span.attributes,
+        "output": span.output if isinstance(span.output, str) else None,
+    }
 
 
 def current_span() -> Span | None:

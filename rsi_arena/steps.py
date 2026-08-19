@@ -20,7 +20,7 @@ lets a generation of agents be stored, mutated and re-run.
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Callable, Literal, Union
 
 from pydantic import BaseModel, Field
 
@@ -48,7 +48,9 @@ class StepContext:
         config: LLMConfig,
         context: str = "",
         state: dict[str, Any] | None = None,
+        on_token: Callable[[str], None] | None = None,
     ) -> None:
+        self.on_token = on_token
         self.llm = llm
         self.tools = tools
         self.tracer = tracer
@@ -142,6 +144,11 @@ class PromptStep(Step):
         default=False,
         description="Carry this exchange into later memory-enabled steps.",
     )
+    stream: bool = Field(
+        default=False,
+        description="Stream deltas to the run's token listener. Ignored when the step "
+                    "uses tools, since a tool loop has no single final message.",
+    )
 
     def _span_kind(self) -> str:
         return "step"
@@ -171,6 +178,12 @@ class PromptStep(Step):
             else None
         )
         tool_schemas = self._tool_schemas(ctx)
+
+        # Streaming and tool loops do not mix: a tool loop has several model
+        # turns and only the last is the answer, so we stream only when the
+        # step is a single call and somebody is listening.
+        if self.stream and not tool_schemas and ctx.on_token is not None:
+            return await self._run_streaming(ctx, messages, system, schema)
 
         completion = None
         for iteration in range(self.max_tool_iterations + 1):
@@ -216,6 +229,37 @@ class PromptStep(Step):
         if self.output_schema:
             return parse_json_loose(completion.text)
         return completion.text
+
+
+    async def _run_streaming(
+        self,
+        ctx: StepContext,
+        messages: list[Message],
+        system: str | None,
+        schema: dict[str, Any] | None,
+    ) -> Any:
+        async with ctx.tracer.span("llm", "llm") as span:
+            completion = None
+            async for event in ctx.llm.stream(
+                messages,
+                system=system,
+                model=self.model,
+                schema=schema,
+                web_search=self.web_search or None,
+                tracer=ctx.tracer,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            ):
+                if event.type == "delta" and ctx.on_token is not None:
+                    ctx.on_token(event.text)
+                elif event.type == "done":
+                    completion = event.completion
+            if completion is None:
+                raise RuntimeError(f"step {self.name!r} streamed no completion")
+            span.set_output(completion.text)
+        if self.memory:
+            ctx.messages = [*messages, completion.message]
+        return parse_json_loose(completion.text) if self.output_schema else completion.text
 
 
 class ToolStep(Step):
