@@ -1,12 +1,15 @@
-"""SQLite storage for recorded quotes, books, trades and game state.
+"""SQLite storage for game state. **Quotes are not stored.**
 
-SQLite is the default because it needs no server and handles this write rate
-comfortably — a busy slate is a few hundred rows a second, well inside what
-WAL mode absorbs. Swap in Postgres by reimplementing ``Store`` against the same
-method signatures; the schema is portable apart from the pragmas.
+Market quotes and order books used to live here. They no longer do: Kalshi
+serves the full life of every market from its candlestick endpoint, open or
+settled, so :mod:`.history` reads history from the API instead. That removes a
+collector to run and a database that could drift from the exchange.
 
-Everything is append-only. Nothing is ever updated in place, so a replay of any
-past instant is exactly what was observed at that instant.
+What remains is the data Kalshi does not hold — live game state, plays, and the
+fixture links that join a market to a real game.
+
+Everything is append-only, so a replay of any past instant is exactly what was
+observed at that instant.
 """
 
 from __future__ import annotations
@@ -19,26 +22,6 @@ from typing import Iterable, Iterator
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
-
-CREATE TABLE IF NOT EXISTS quotes (
-    ticker TEXT NOT NULL, ts TEXT NOT NULL,
-    yes_bid REAL, yes_ask REAL, yes_bid_size REAL, yes_ask_size REAL,
-    last REAL, volume REAL, open_interest REAL, status TEXT,
-    PRIMARY KEY (ticker, ts)
-) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS quotes_ts ON quotes(ts);
-
-CREATE TABLE IF NOT EXISTS books (
-    ticker TEXT NOT NULL, ts TEXT NOT NULL,
-    yes_levels TEXT NOT NULL, no_levels TEXT NOT NULL,
-    PRIMARY KEY (ticker, ts)
-) WITHOUT ROWID;
-
-CREATE TABLE IF NOT EXISTS trades (
-    trade_id TEXT PRIMARY KEY, ticker TEXT NOT NULL, ts TEXT NOT NULL,
-    price REAL, count REAL, taker_side TEXT
-);
-CREATE INDEX IF NOT EXISTS trades_ticker_ts ON trades(ticker, ts);
 
 CREATE TABLE IF NOT EXISTS markets (
     ticker TEXT PRIMARY KEY, event_ticker TEXT, series_ticker TEXT,
@@ -88,33 +71,6 @@ class Store:
 
     # ---------- writes ----------
 
-    def write_quotes(self, quotes: Iterable) -> int:
-        rows = [(q.ticker, q.ts, q.yes_bid, q.yes_ask, q.yes_bid_size,
-                 q.yes_ask_size, q.last, q.volume, q.open_interest, q.status)
-                for q in quotes]
-        if not rows:
-            return 0
-        with self._conn() as conn:
-            conn.executemany(
-                "INSERT OR IGNORE INTO quotes VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
-        return len(rows)
-
-    def write_book(self, book) -> None:
-        with self._conn() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO books VALUES (?,?,?,?)",
-                (book.ticker, book.ts, json.dumps(book.yes), json.dumps(book.no)))
-
-    def write_trades(self, ticker: str, trades: Iterable[dict]) -> int:
-        rows = [(t.get("trade_id") or f"{ticker}:{t.get('created_time')}",
-                 ticker, t.get("created_time", ""), t.get("yes_price"),
-                 t.get("count"), t.get("taker_side")) for t in trades]
-        if not rows:
-            return 0
-        with self._conn() as conn:
-            conn.executemany("INSERT OR IGNORE INTO trades VALUES (?,?,?,?,?,?)", rows)
-        return len(rows)
-
     def upsert_markets(self, refs: Iterable, seen_at: str) -> int:
         rows = [(r.ticker, r.event_ticker, r.series_ticker, r.title, r.subtitle,
                  r.sport, r.league, r.market_type, r.close_time, seen_at, seen_at)
@@ -154,8 +110,7 @@ class Store:
     def stats(self) -> dict[str, int]:
         with self._conn() as conn:
             return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-                    for t in ("quotes", "books", "trades", "markets",
-                              "game_states", "plays", "links")}
+                    for t in ("markets", "game_states", "plays", "links")}
 
     def tickers_for_event(self, event_ticker: str) -> list[str]:
         with self._conn() as conn:

@@ -2,25 +2,23 @@
 
 This is the "get the state of xyz market at this time" half.
 
-Three sources, in increasing resolution:
+Live state comes from the exchange; history comes from the candlestick endpoint
+via :mod:`.history`. **Nothing is stored locally.** Kalshi keeps the full life of
+every market, open or settled, so a replay is served by the exchange rather than
+reconstructed from a database that could drift from it.
 
-* ``get_market`` / ``get_orderbook`` — live, from the exchange
-* ``get_candles`` — Kalshi's own OHLC history, minute resolution, no local
-  storage needed but coarse
-* ``state_at`` — local recorded snapshots, as fine as the recorder was run
-
-For point-in-time work, ``state_at`` is the one that matters: it never returns
-anything stamped after the requested instant, which is what keeps a replay
-honest.
+``state_at``, ``price_path`` and ``closing_price`` are thin wrappers over
+:class:`~.history.History` and keep their point-in-time guarantee: none of them
+can return a period ending after the instant asked for.
 """
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
 from .client import KalshiClient
+from .history import MINUTE, Candle, History
 
 
 @dataclass(frozen=True)
@@ -87,10 +85,9 @@ def _now() -> str:
 class Quotes:
     """Read market state from the exchange or from recorded snapshots."""
 
-    def __init__(self, client: KalshiClient | None = None,
-                 db_path: str | None = None) -> None:
+    def __init__(self, client: KalshiClient | None = None) -> None:
         self.client = client or KalshiClient()
-        self.db_path = db_path
+        self.history = History(self.client)
 
     # ---------- live ----------
 
@@ -165,53 +162,21 @@ class Quotes:
              "period_interval": interval_minutes},
         ).get("candlesticks", [])
 
-    def state_at(self, ticker: str, when: datetime) -> Quote | None:
-        """The last recorded snapshot at or before ``when``.
+    def state_at(self, ticker: str, when: datetime,
+                 interval: int = MINUTE) -> Candle | None:
+        """The market's state at an instant, from the API.
 
-        Point-in-time by construction: it cannot return a quote stamped after
-        the requested instant, so a replay cannot see its own future.
+        Point-in-time by construction — the returned period ends at or before
+        ``when``. Works on settled markets exactly as on open ones.
         """
-        if not self.db_path:
-            raise RuntimeError("state_at needs db_path pointing at a recorder database")
-        iso = when.astimezone(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute(
-                """SELECT ts, yes_bid, yes_ask, yes_bid_size, yes_ask_size,
-                          last, volume, open_interest, status
-                   FROM quotes WHERE ticker = ? AND ts <= ?
-                   ORDER BY ts DESC LIMIT 1""",
-                (ticker, iso),
-            ).fetchone()
-        if not row:
-            return None
-        return Quote(ticker=ticker, ts=row[0], yes_bid=row[1], yes_ask=row[2],
-                     yes_bid_size=row[3], yes_ask_size=row[4], last=row[5],
-                     volume=row[6] or 0.0, open_interest=row[7] or 0.0,
-                     status=row[8] or "", source="snapshot")
+        return self.history.quote_at(ticker, when, interval)
 
-    def path(self, ticker: str, start: datetime, end: datetime) -> list[Quote]:
-        """Every recorded snapshot in a window, oldest first."""
-        if not self.db_path:
-            raise RuntimeError("path needs db_path pointing at a recorder database")
-        with sqlite3.connect(self.db_path) as conn:
-            rows = conn.execute(
-                """SELECT ts, yes_bid, yes_ask, yes_bid_size, yes_ask_size,
-                          last, volume, open_interest, status
-                   FROM quotes WHERE ticker = ? AND ts BETWEEN ? AND ?
-                   ORDER BY ts ASC""",
-                (ticker, start.astimezone(timezone.utc).isoformat(),
-                 end.astimezone(timezone.utc).isoformat()),
-            ).fetchall()
-        return [Quote(ticker, r[0], r[1], r[2], r[3], r[4], r[5],
-                      r[6] or 0.0, r[7] or 0.0, r[8] or "", "snapshot") for r in rows]
+    def path(self, ticker: str, start: datetime | None = None,
+             end: datetime | None = None, interval: int = MINUTE) -> list[Candle]:
+        """Candles over a window, defaulting to the market's whole life."""
+        return self.history.price_path(ticker, start, end, interval)
 
     def closing_price(self, ticker: str) -> float | None:
-        """Last recorded mid before the market closed — the CLV benchmark."""
-        if not self.db_path:
-            raise RuntimeError("closing_price needs db_path")
-        with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute(
-                """SELECT yes_bid, yes_ask FROM quotes
-                   WHERE ticker = ? AND yes_bid IS NOT NULL AND yes_ask IS NOT NULL
-                   ORDER BY ts DESC LIMIT 1""", (ticker,)).fetchone()
-        return (row[0] + row[1]) / 2 if row else None
+        """Mid of the last two-sided quote before close — the CLV benchmark."""
+        candle = self.history.closing_quote(ticker)
+        return candle.mid if candle else None
