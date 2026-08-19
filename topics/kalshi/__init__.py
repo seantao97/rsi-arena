@@ -6,6 +6,7 @@ Three questions, three modules:
 
     Discovery().whats_bettable(league="MLB")   # what can I bet on
     Quotes().get_market(ticker)                # what is it worth now
+    History().full_history(ticker)             # what was it worth, whole life
     gamestate.game_state("MLB", game_id)       # what is happening in the game
     linking.link_series(...)                   # which game is this market about
 
@@ -19,6 +20,7 @@ from .credentials import Credentials, load as load_credentials, status as creden
 from .discovery import Discovery, MarketRef
 from .linking import (Fixture, FieldEvent, Link, parse_event_ticker,
                       parse_field_event, field_entrants, harvest_team_codes)
+from .history import Candle, History, DAY, HOUR, MINUTE
 from .quotes import OrderBook, Quote, Quotes
 from .stream import KalshiStream, LiveBook
 from .taxonomy import MarketType, SeriesClass, Sport, classify_series
@@ -26,6 +28,7 @@ from .taxonomy import MarketType, SeriesClass, Sport, classify_series
 __all__ = [
     "KalshiClient", "Credentials", "load_credentials", "credential_status",
     "Discovery", "MarketRef", "Quotes", "Quote", "OrderBook",
+    "History", "Candle", "MINUTE", "HOUR", "DAY",
     "Fixture", "FieldEvent", "Link", "parse_event_ticker", "parse_field_event",
     "field_entrants", "harvest_team_codes", "KalshiStream", "LiveBook",
     "Sport", "MarketType", "SeriesClass", "classify_series",

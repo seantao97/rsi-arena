@@ -6,7 +6,8 @@ collector that records the answers at high frequency.
 | Question | Module |
 |---|---|
 | *What can I bet on?* | [`discovery.py`](discovery.py) — series, events, markets, classified by sport, league and market type |
-| *What is this market worth, now or at 14:03?* | [`quotes.py`](quotes.py) — live quotes, order books, candles, and point-in-time lookup from recorded snapshots |
+| *What is this market worth right now?* | [`quotes.py`](quotes.py) — live quotes and order books |
+| *What was it worth at 14:03, or over its whole life?* | [`history.py`](history.py) — candlesticks from the API, open or settled markets |
 | *What is actually happening in the game?* | [`gamestate.py`](gamestate.py) — scores, situation and play-by-play |
 | *Which game is this market about?* | [`linking.py`](linking.py) — parses fixtures out of event tickers and matches them to the game feed |
 | *Record all of it* | [`recorder.py`](recorder.py), [`storage.py`](storage.py) |
@@ -36,16 +37,38 @@ for g in gamestate.todays_games("MLB"):
 Record continuously:
 
 ```bash
-python -m topics.kalshi.recorder --leagues MLB,NFL,NBA --interval 1.0 --db kalshi.db
+python -m topics.kalshi.recorder --leagues MLB,NFL,NBA --db kalshi.db   # game state only
 ```
 
-Then replay any instant:
+## History — no storage, always the API
+
+Kalshi keeps the whole life of every market, open or settled, so nothing is
+recorded locally. There is no collector to run and no database that can drift
+from the exchange.
 
 ```python
-q = Quotes(db_path="kalshi.db")
-q.state_at("KXMLBGAME-26AUG17STLCIN-CIN", datetime(2026, 8, 17, 19, 3, tzinfo=timezone.utc))
-q.closing_price("KXMLBGAME-26AUG17STLCIN-CIN")   # the CLV benchmark
+from topics.kalshi import History, MINUTE, HOUR
+
+h = History()
+h.full_history(ticker)                       # listing to close, minute bars
+h.quote_at(ticker, when)                     # point in time; never returns later data
+h.closing_quote(ticker)                      # last two-sided quote — the CLV benchmark
+h.event_history(event_ticker)                # every market on a fixture
+h.series_history(series, start, end, HOUR)   # a whole competition
+h.settlement(ticker)                         # "yes" / "no" / None
 ```
+
+Three constraints, all found by hitting the endpoint:
+
+- `period_interval` accepts **1, 60 or 1440 only**. 5, 15 and 240 return a 400.
+- A request spans at most **5000 periods** — 3.47 days at minute resolution.
+  `candles()` chunks automatically.
+- The path needs the **series** ticker, which is not on the market object.
+  `resolve_series()` fetches it from `/events` and caches it.
+
+Settled markets answer exactly like open ones. `request_count()` prices a sweep
+before you make it — 500 markets over 30 days is 4,500 calls at minute
+resolution and 500 at hourly.
 
 ## What we found in the API
 
@@ -111,11 +134,8 @@ expected rather than exceptional — every adapter normalises to the same
 
 ## Storage
 
-SQLite, WAL mode, append-only. Nothing is updated in place, so a replay of any
-past instant returns exactly what was observed then. A busy slate is a few
-hundred rows a second, comfortably inside what SQLite absorbs.
-
-Tables: `quotes`, `books`, `trades`, `markets`, `game_states`, `plays`, `links`.
+Only what Kalshi does not hold: `markets`, `game_states`, `plays`, `links`.
+Quotes and order books are never persisted — history comes from the API.
 
 `links` is the join table between a Kalshi event and a fixture in the game-state
 feed; `linking.py` fills it — see below.
@@ -185,9 +205,9 @@ these were found by running it, not by reading docs:
 
 ## Known gaps
 
-- **Order book depth at scale.** REST books are one call per market, so
-  recording them for a full slate is expensive. Use the stream, or
-  `--book-depth N` to cap it.
+- **Order book history does not exist.** Candlesticks carry best bid and ask,
+  not depth. Historical depth is unavailable at any price; only live depth is,
+  via `stream.py`.
 - **126 series have no derivable league.** Mostly one-off world-soccer
   competitions. They still carry a correct sport and a `SOCCER_OTHER`-style
   generic league, so filtering by sport loses nothing.
