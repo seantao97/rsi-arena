@@ -23,6 +23,8 @@ from .discovery import Discovery, MarketRef
 from .linking import (Fixture, FieldEvent, Link, parse_event_ticker,
                       parse_field_event, field_entrants, harvest_team_codes)
 from .coherence import Coherence, Violation
+from .implied import (american_to_prob, devig, fair_probabilities,
+                      kalshi_vs_book, overround)
 from .fees import (Trade, breakeven, clv, edge, fee, kelly, maker_fee, taker_fee)
 from .history import Candle, History, DAY, HOUR, MINUTE
 from .quotes import OrderBook, Quote, Quotes
@@ -34,6 +36,7 @@ __all__ = [
     "Discovery", "MarketRef", "Quotes", "Quote", "OrderBook",
     "History", "Candle", "MINUTE", "HOUR", "DAY",
     "Coherence", "Violation",
+    "american_to_prob", "devig", "fair_probabilities", "kalshi_vs_book", "overround",
     "taker_fee", "maker_fee", "fee", "breakeven", "edge", "kelly", "clv", "Trade",
     "Fixture", "FieldEvent", "Link", "parse_event_ticker", "parse_field_event",
     "field_entrants", "harvest_team_codes", "KalshiStream", "LiveBook",

@@ -87,7 +87,7 @@ FIXTURE_FREQUENCIES = {"custom", "daily", "weekly"}
 # Matched by prefix, not regex. Ticker stems are concatenated words, so a
 # pattern like ``\bMLS\b`` never fires on ``MLSGAME`` — the trailing word
 # boundary has nothing to match against.
-SOCCER_COMPETITIONS: dict[str, tuple[str, str]] = {
+SOCCER_STEMS: dict[str, tuple[str, str]] = {
     # England
     "EPL": ("EPL", "eng.1"), "FACUP": ("FA_CUP", "eng.fa"),
     "EFLCUP": ("EFL_CUP", "eng.league_cup"), "ENGCS": ("ENG_SHIELD", "eng.charity"),
@@ -131,15 +131,58 @@ SOCCER_COMPETITIONS: dict[str, tuple[str, str]] = {
 }
 
 # Longest stem first, so LIGAMX is not shadowed by LIGA-prefixed neighbours.
-_COMPETITION_ORDER = sorted(SOCCER_COMPETITIONS, key=len, reverse=True)
+_COMPETITION_ORDER = sorted(SOCCER_STEMS, key=len, reverse=True)
 
 
 def match_competition(stem: str) -> tuple[str, str] | None:
     """Resolve a ticker stem to ``(league, espn_slug)`` by longest prefix."""
     for key in _COMPETITION_ORDER:
         if stem.startswith(key):
-            return SOCCER_COMPETITIONS[key]
+            return SOCCER_STEMS[key]
     return None
+
+
+# Non-soccer leagues, each one ESPN endpoint. ESPN keys most sports by league —
+# ``basketball/nba`` is the whole NBA — but keys soccer by competition, which is
+# why soccer needs one entry per tournament above and everything else needs one
+# entry here.
+NON_SOCCER_LEAGUES: dict[str, tuple[Sport, str]] = {
+    "NFL": (Sport.FOOTBALL, "football/nfl"),
+    "NCAAF": (Sport.FOOTBALL, "football/college-football"),
+    "NBA": (Sport.BASKETBALL, "basketball/nba"),
+    "WNBA": (Sport.BASKETBALL, "basketball/wnba"),
+    "NCAAB": (Sport.BASKETBALL, "basketball/mens-college-basketball"),
+    "INTLBASKET": (Sport.BASKETBALL, "basketball/nba"),
+    "MLB": (Sport.BASEBALL, "baseball/mlb"),
+    "NHL": (Sport.HOCKEY, "hockey/nhl"),
+    "TENNIS": (Sport.TENNIS, "tennis/atp"),
+    "GOLF": (Sport.GOLF, "golf/pga"),
+    "COMBAT": (Sport.COMBAT, "mma/ufc"),
+    "MOTORSPORT": (Sport.MOTORSPORT, "racing/f1"),
+    "CRICKET": (Sport.CRICKET, "cricket/league"),
+}
+
+
+def _build_registry() -> dict[str, tuple[Sport, str]]:
+    """One league -> (sport, ESPN path) map, soccer and everything else.
+
+    Previously soccer routing lived in two places — a competition table here and
+    a league table in gamestate — which agreed by luck and nothing else. This is
+    the single source of truth; gamestate reads it rather than keeping a copy.
+    """
+    registry: dict[str, tuple[Sport, str]] = dict(NON_SOCCER_LEAGUES)
+    for league, slug in SOCCER_STEMS.values():
+        registry.setdefault(league, (Sport.SOCCER, f"soccer/{slug}"))
+    return registry
+
+
+COMPETITIONS: dict[str, tuple[Sport, str]] = _build_registry()
+
+
+def espn_path(league: str) -> str | None:
+    """ESPN ``sport/league`` path for a league code, or None if unwired."""
+    hit = COMPETITIONS.get(league)
+    return hit[1] if hit else None
 
 
 # League detection. Order matters — longer, more specific stems first.
