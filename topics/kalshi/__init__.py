@@ -7,6 +7,8 @@ Three questions, three modules:
     Discovery().whats_bettable(league="MLB")   # what can I bet on
     Quotes().get_market(ticker)                # what is it worth now
     History().full_history(ticker)             # what was it worth, whole life
+    Coherence().check_event(event_ticker)      # what is priced inconsistently
+    edge(probability, price)                   # is there anything left after fees
     gamestate.game_state("MLB", game_id)       # what is happening in the game
     linking.link_series(...)                   # which game is this market about
 
@@ -20,6 +22,8 @@ from .credentials import Credentials, load as load_credentials, status as creden
 from .discovery import Discovery, MarketRef
 from .linking import (Fixture, FieldEvent, Link, parse_event_ticker,
                       parse_field_event, field_entrants, harvest_team_codes)
+from .coherence import Coherence, Violation
+from .fees import (Trade, breakeven, clv, edge, fee, kelly, maker_fee, taker_fee)
 from .history import Candle, History, DAY, HOUR, MINUTE
 from .quotes import OrderBook, Quote, Quotes
 from .stream import KalshiStream, LiveBook
@@ -29,6 +33,8 @@ __all__ = [
     "KalshiClient", "Credentials", "load_credentials", "credential_status",
     "Discovery", "MarketRef", "Quotes", "Quote", "OrderBook",
     "History", "Candle", "MINUTE", "HOUR", "DAY",
+    "Coherence", "Violation",
+    "taker_fee", "maker_fee", "fee", "breakeven", "edge", "kelly", "clv", "Trade",
     "Fixture", "FieldEvent", "Link", "parse_event_ticker", "parse_field_event",
     "field_entrants", "harvest_team_codes", "KalshiStream", "LiveBook",
     "Sport", "MarketType", "SeriesClass", "classify_series",

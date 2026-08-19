@@ -222,6 +222,61 @@ class History:
         m = self.client.get(f"/markets/{ticker}")["market"]
         return m.get("result") or None
 
+    def trades(self, ticker: str, start: datetime | None = None,
+               end: datetime | None = None, max_trades: int | None = None) -> list[dict]:
+        """Every print on a market in a window, newest first from the API.
+
+        Finer than candles: each trade carries its price, size and which side
+        took liquidity, which candles do not. Use it for anything about flow
+        rather than level. Works on settled markets.
+        """
+        params: dict = {"ticker": ticker}
+        if start:
+            params["min_ts"] = int(start.timestamp())
+        if end:
+            params["max_ts"] = int(end.timestamp())
+        return list(self.client.paginate("/markets/trades", "trades", params,
+                                         max_items=max_trades))
+
+    def volume_profile(self, ticker: str, start: datetime | None = None,
+                       end: datetime | None = None) -> dict[float, float]:
+        """Contracts traded at each price over a window.
+
+        Where the volume actually sat, as opposed to where the market closed —
+        a market that printed 90% of its size at 0.30 and drifted to 0.55 tells
+        a different story from one that traded evenly.
+        """
+        profile: dict[float, float] = {}
+        for t in self.trades(ticker, start, end):
+            price = _f(t.get("yes_price_dollars"))
+            size = _f(t.get("count_fp")) or 0.0
+            if price is not None:
+                profile[price] = profile.get(price, 0.0) + size
+        return dict(sorted(profile.items()))
+
+    def rules(self, ticker: str) -> dict:
+        """Settlement terms for a market, as written by the exchange.
+
+        ``rules_primary`` is the sentence that decides the contract. Reading it
+        is the cheapest way to avoid answering a slightly different question
+        than the one that settles.
+        """
+        m = self.client.get(f"/markets/{ticker}")["market"]
+        return {
+            "ticker": ticker,
+            "title": m.get("title", ""),
+            "subtitle": m.get("yes_sub_title", ""),
+            "rules_primary": m.get("rules_primary", ""),
+            "rules_secondary": m.get("rules_secondary", ""),
+            "strike_type": m.get("strike_type", ""),
+            "floor_strike": m.get("floor_strike"),
+            "cap_strike": m.get("cap_strike"),
+            "open_time": m.get("open_time", ""),
+            "close_time": m.get("close_time", ""),
+            "status": m.get("status", ""),
+            "result": m.get("result") or None,
+        }
+
     # ---------- many markets ----------
 
     def event_history(self, event_ticker: str, start: datetime | None = None,
