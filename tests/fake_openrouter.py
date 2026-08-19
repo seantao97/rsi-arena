@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import time
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -46,6 +45,10 @@ CANNED = {
         "still_missing": "Nothing material.", "sufficient": True,
     },
     "stop_check": {"done": True, "reason": "The press release is a primary source and it is dated."},
+    # For eval scorers of type llm_judge, whose schema is named "judgement".
+    "judgement": {"score": 0.75, "passed": True,
+                  "reason": "Sourced to the press release and says what would change it. "
+                            "(Canned — this is the local fake, not a real judge.)"},
     "decompose": {
         "expression": "2700000 / 2.5 / 40 * 0.02",
         "weakest_factor": "pianos per household",

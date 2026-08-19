@@ -140,18 +140,90 @@ class BudgetExceeded(RuntimeError):
         super().__init__(f"budget exceeded: {what} would take spend to ${spent:.4f} of ${limit:.4f}")
         self.spent = spent
         self.limit = limit
+        self.what = what
+
+
+class MaxSpendExceeded(BudgetExceeded):
+    """The ceiling was hit while ``max_spend_mode`` was on.
+
+    Distinct from :class:`BudgetExceeded` on purpose. A plain budget trip means
+    the run stopped with nothing; this one means the run stopped *and then*
+    bailed out through ``Agent.immediate_answer``, so there is usually an
+    answer attached to it. Callers that care about the difference — the eval
+    harness, the arena — should be able to tell them apart by type rather than
+    by parsing a message. ``ErrorKind.MAX_SPEND`` is how it lands in an
+    ``AgentResult``.
+    """
+
+    def __init__(
+        self,
+        spent: float,
+        limit: float,
+        what: str,
+        *,
+        reserve_usd: float = 0.0,
+        answered: bool = False,
+    ) -> None:
+        super().__init__(spent, limit, what)
+        self.reserve_usd = reserve_usd
+        self.answered = answered
+
+    def __str__(self) -> str:
+        got = "answered from state" if self.answered else "no answer"
+        return (
+            f"max spend reached: {self.what} took spend to ${self.spent:.4f} of "
+            f"${self.limit:.4f} (+${self.reserve_usd:.4f} bail-out reserve); {got}"
+        )
 
 
 class CostTracker(BaseModel):
-    """Ledger for one agent run. Enforces the ceiling as records land."""
+    """Ledger for one agent run. Enforces the ceiling as records land.
+
+    ``reserve_usd`` is money the run may *not* spend on its plan, held back for
+    the bail-out answer in ``max_spend_mode``. It sits outside ``max_usd``
+    until :meth:`open_reserve` is called, at which point the effective ceiling
+    becomes ``max_usd + reserve_usd`` and the call cap is lifted.
+
+    The reserve is an allowance, not a guarantee: a model call's price is only
+    known once it has been made, so a bail-out can overshoot the reserve on its
+    last call. What is guaranteed is that it is *recorded* — the real cost
+    lands in ``records`` like any other, so ``total_usd`` is always the truth
+    rather than the plan.
+    """
 
     max_usd: float | None = None
     max_calls: int | None = None
+    reserve_usd: float = 0.0
+    reserve_open: bool = False
     records: list[CostRecord] = Field(default_factory=list)
 
     @property
     def total_usd(self) -> float:
         return sum(r.cost.usd for r in self.records)
+
+    @property
+    def limit_usd(self) -> float | None:
+        """The ceiling in force right now, reserve included once it is open."""
+        if self.max_usd is None:
+            return None
+        return self.max_usd + self.reserve_usd if self.reserve_open else self.max_usd
+
+    def open_reserve(self) -> float:
+        """Release the bail-out reserve. Returns what it is allowed to spend.
+
+        Also lifts the call cap: a run that tripped ``max_calls`` rather than
+        ``max_usd`` still has money, and refusing its one bail-out call on a
+        count would defeat the whole point of holding a reserve.
+        """
+        self.reserve_open = True
+        self.max_calls = None
+        return max(0.0, (self.limit_usd or 0.0) - self.total_usd)
+
+    def reserve_spent(self) -> float:
+        """How much of the reserve the bail-out actually used. Never negative."""
+        if self.max_usd is None:
+            return 0.0
+        return max(0.0, self.total_usd - self.max_usd)
 
     @property
     def usage(self) -> Usage:
@@ -167,16 +239,18 @@ class CostTracker(BaseModel):
     def add(self, kind: str, name: str, cost: Cost, span_id: str | None = None) -> CostRecord:
         record = CostRecord(kind=kind, name=name, cost=cost, span_id=span_id)  # type: ignore[arg-type]
         self.records.append(record)
-        if self.max_usd is not None and self.total_usd > self.max_usd:
-            raise BudgetExceeded(self.total_usd, self.max_usd, f"{kind}:{name}")
+        limit = self.limit_usd
+        if limit is not None and self.total_usd > limit:
+            raise BudgetExceeded(self.total_usd, limit, f"{kind}:{name}")
         return record
 
     def check(self, name: str = "next call") -> None:
         """Pre-flight the ceiling, so we refuse *before* spending, not after."""
         if self.max_calls is not None and self.calls >= self.max_calls:
-            raise BudgetExceeded(self.total_usd, self.max_usd or 0.0, f"call limit ({name})")
-        if self.max_usd is not None and self.total_usd >= self.max_usd:
-            raise BudgetExceeded(self.total_usd, self.max_usd, name)
+            raise BudgetExceeded(self.total_usd, self.limit_usd or 0.0, f"call limit ({name})")
+        limit = self.limit_usd
+        if limit is not None and self.total_usd >= limit:
+            raise BudgetExceeded(self.total_usd, limit, name)
 
     def by(self, field: str = "name") -> dict[str, float]:
         out: dict[str, float] = {}
@@ -188,6 +262,9 @@ class CostTracker(BaseModel):
     def summary(self) -> dict[str, Any]:
         return {
             "total_usd": round(self.total_usd, 6),
+            "max_usd": self.max_usd,
+            "reserve_usd": round(self.reserve_usd, 6) if self.reserve_usd else 0.0,
+            "reserve_used_usd": round(self.reserve_spent(), 6) if self.reserve_open else 0.0,
             "calls": self.calls,
             "cached_calls": sum(1 for r in self.records if r.cost.cached),
             "by_kind": {k: round(v, 6) for k, v in self.by("kind").items()},

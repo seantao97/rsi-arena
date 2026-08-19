@@ -24,11 +24,11 @@ from typing import Annotated, Any, Callable, Literal, Union
 
 from pydantic import BaseModel, Field
 
-from .costs import CostTracker
-from .llm import LLMClient, LLMConfig, Message, WebSearch, parse_json_loose
-from .template import evaluate, render
+from ..core.costs import CostTracker
+from ..core.template import evaluate, render
+from ..core.trace import Tracer
+from ..llm import LLMClient, LLMConfig, Message, WebSearch, parse_json_loose
 from .tools import Toolbox
-from .trace import Tracer
 
 
 class StepContext:
@@ -70,6 +70,35 @@ class StepContext:
 
     def render(self, template: str) -> str:
         return render(template, self.state)
+
+    def settings(self, **step_overrides: Any) -> dict[str, Any]:
+        """The agent's call settings, with this step's overrides on top.
+
+        Every step sends these explicitly rather than relying on the client's
+        own defaults, because the client is usually *shared* — one per process
+        in the backend, one per battle, one per eval suite. A shared client
+        cannot carry one agent's model and another's temperature, so an agent
+        that leaned on it would silently run on whatever the last caller set.
+        The agent's config is the authority for the agent's calls; a step-level
+        field is the authority for that step.
+        """
+        settings = {
+            "model": self.config.model,
+            "temperature": self.config.temperature,
+            "top_p": self.config.top_p,
+            "max_tokens": self.config.max_tokens,
+            "seed": self.config.seed,
+            "stop": self.config.stop,
+            "reasoning": self.config.reasoning,
+            "provider": self.config.provider,
+            "timeout_s": self.config.timeout_s,
+            "cache": self.config.cache,
+            "cache_ttl_s": self.config.cache_ttl_s,
+        }
+        if self.config.fallback_models:
+            settings["fallback_models"] = self.config.fallback_models
+        settings.update({k: v for k, v in step_overrides.items() if v is not None})
+        return {k: v for k, v in settings.items() if v is not None}
 
 
 class Step(BaseModel):
@@ -194,14 +223,13 @@ class PromptStep(Step):
                 completion = await ctx.llm.complete(
                     messages,
                     system=system,
-                    model=self.model,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
                     tools=None if last_turn else tool_schemas,
                     tool_choice=self.tool_choice if iteration == 0 else None,
                     schema=schema,
-                    web_search=self.web_search or None,
+                    web_search=self.web_search or ctx.config.web_search or None,
                     tracer=ctx.tracer,
+                    **ctx.settings(model=self.model, temperature=self.temperature,
+                                   max_tokens=self.max_tokens),
                 )
                 span.set_output(completion.text or [tc.function.name for tc in completion.tool_calls])
             if not completion.tool_calls:
@@ -243,12 +271,11 @@ class PromptStep(Step):
             async for event in ctx.llm.stream(
                 messages,
                 system=system,
-                model=self.model,
                 schema=schema,
-                web_search=self.web_search or None,
+                web_search=self.web_search or ctx.config.web_search or None,
                 tracer=ctx.tracer,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
+                **ctx.settings(model=self.model, temperature=self.temperature,
+                               max_tokens=self.max_tokens),
             ):
                 if event.type == "delta" and ctx.on_token is not None:
                     ctx.on_token(event.text)
@@ -369,7 +396,6 @@ class LoopStep(Step):
                 ctx.render(self.until_prompt),
                 system="Answer only with JSON matching the schema. Be strict: say done only "
                        "if the stated condition is genuinely met.",
-                model=self.until_model,
                 schema={
                     "type": "json_schema",
                     "json_schema": {
@@ -387,13 +413,18 @@ class LoopStep(Step):
                     },
                 },
                 tracer=ctx.tracer,
+                **ctx.settings(model=self.until_model),
             )
             try:
                 verdict = parse_json_loose(completion.text)
             except ValueError:
-                # An unparseable stop check must not end the loop early; the
+                verdict = None
+            if not isinstance(verdict, dict):
+                # A stop check we cannot read must not end the loop early, and
+                # must not crash it either — a model that answers a schema step
+                # with a bare string is a bad answer, not a broken agent. The
                 # loop ceiling is the backstop that always holds.
-                span.annotate(unparseable=completion.text[:200])
+                span.annotate(unusable=completion.text[:200])
                 return False
             span.set_output(verdict)
             return bool(verdict.get("done"))

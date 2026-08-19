@@ -98,8 +98,11 @@ Things this design has not settled, listed honestly:
 
 ## Running it
 
-The [runtime](rsi_arena/) is built: the layer agents are made of. The arena itself — battles,
-votes, ratings, the optimizer loop — is not.
+The [runtime](rsi_arena/) is built: the layer agents are made of, laid out bottom to top as
+[`core/`](rsi_arena/core) (cache, cost, rate limits, retries, traces), [`llm/`](rsi_arena/llm)
+(models), [`api/`](rsi_arena/api) (everything else), [`agent/`](rsi_arena/agent) (tools, steps,
+plans) and [`evals/`](rsi_arena/evals) (scoring an agent without a voter). The arena itself —
+battles, votes, ratings, the optimizer loop — is not.
 
 ### 1. Install
 
@@ -119,29 +122,24 @@ does both halves, Python and npm.
 
 ### 2. Check it works, before spending anything
 
-Both test files run against a fake OpenRouter and a fake SearchApi built on
+The whole backend is tested against a fake OpenRouter and a fake SearchApi built on
 `httpx.MockTransport`. No key, no network, no cost — so run these first and know the failure is
 yours rather than ours.
 
 ```bash
-make test                           # or run them individually:
-python tests/test_end_to_end.py     # the runtime
-python tests/test_examples.py       # the three sample agents
-python tests/test_server.py         # the backend, its SSE routes and blinding
+make test                     # or: pytest
+make coverage                 # the same, with a per-module report
+pytest tests/test_llm.py -v   # one file
+pytest -k max_spend           # one idea
 ```
 
 ```
-1. retries+cost           ok (attempts=3, $0.0012)
-2. cache + single-flight  ok (1 wire call for 20 parallel, {'entries': 2, 'hits': 19, 'misses': 2})
-3. structured output      ok (Answer(answer='42', confidence=0.9))
-4. streaming (+replay)    ok ('hello', $0.0003)
-5. api + cache + cost     ok ($0.004 then $0.0 cached)
-6. agent run              ok
-7. agent/trace JSON       ok (agent round-trips, trace serialises)
-8. budget ceiling         ok (BudgetExceeded: budget exceeded: llm:test/model would take spend
-   to $0.0012 of $0.0001)
-all checks passed
+395 passed in 0.92s
 ```
+
+[`tests/README.md`](tests/README.md) lists what is covered where. The short version: the
+runtime (`core`, `llm`, `api`, `agent`, `evals`), the sample agents, and every backend route
+including the SSE stream and blinding.
 
 ### 3. Keys
 
@@ -277,7 +275,7 @@ An agent is a context, a plan and a set of tools. In full:
 ```python
 import asyncio
 from rsi_arena import Agent, AgentConfig, Plan, PromptStep, ToolStep, Toolbox, api_tool
-from rsi_arena.apis import SEARCHAPI
+from rsi_arena.api.apis import SEARCHAPI
 
 agent = Agent(
     name="researcher",
@@ -301,6 +299,119 @@ agent. That one field is the difference the arena measures.
 [`rsi_arena/README.md`](rsi_arena/README.md) covers the step types, the loop stopping conditions,
 and how to register a new API — which is one `APISpec` literal and no client code.
 
+### 8. Scoring an agent, without waiting for a voter
+
+A battle asks a human which of two answers is better. An **eval** asks a *function* whether one
+answer is good — cheaper, repeatable, and runnable with nobody watching, which is what makes it
+the thing a nightly job or the optimizer can use. The arena still needs votes for taste; evals
+catch the regressions that never should have reached a voter.
+
+An `Eval` is an agent, a prompt, and the scoring function, which the constructor takes and
+resolves:
+
+```python
+from rsi_arena import Eval, EvalSuite
+from rsi_arena.evals import all_of, contains, llm_judge, non_empty
+
+result = await Eval(agent, "Did the ECB cut rates in July 2026?", all_of([
+    contains("unchanged"),
+    non_empty(200),
+    llm_judge("Every factual claim carries the URL it came from."),
+])).run()
+
+print(result.score.value, result.score.passed, result.score.notes, result.cost_usd)
+```
+
+A scorer can be as small as you like — it takes the output, optionally a context with the run
+and the agent, and returns a `Score`, a bool, a number or a dict:
+
+```python
+Eval(agent, "When did the ECB last meet?", lambda output: "2026" in output)
+```
+
+Built in: `contains`, `not_contains`, `regex`, `non_empty`, `json_valid`, `under_cost`,
+`completed`, `llm_judge`, and `all_of` to combine them. `EvalSuite.over(agents, cases)` runs
+every case against every agent concurrently against one shared client — the arena comparison,
+minus the votes:
+
+```bash
+python examples/evals.py                          # every sample agent, every case
+python examples/evals.py --agent plugin --judge   # add a model-graded rubric
+```
+
+```
+eval                   agent                   score     cost  notes
+samples:0              researcher-pipeline      1.00   0.1840  non_empty: 2140 characters; …
+samples:1              researcher-freeform      0.67   0.0910  regex: no match
+samples:2              fermi                    1.00   0.0184  contains: found 1 of 1
+
+3 evals, 2 passed, mean 0.89, $0.2934
+```
+
+Results are stored — in the process today, through an interface a database drops straight into.
+The backend exposes all of it: `POST /api/evals`, `POST /api/evals/suite`, `GET /api/evals`,
+`GET /api/evals/leaderboard`.
+
+### 9. Max spend, and answering anyway
+
+`max_usd` is enforced: over the ceiling the run stops. By default it stops with *nothing*, which
+is a bad trade — you paid $2 and got no answer, when the agent had already gathered most of what
+it needed.
+
+`max_spend_mode` changes that. At the ceiling, the run opens a small reserve and spends it on
+one model call whose input is the run state and whose output is the best answer that state
+supports:
+
+```python
+config = AgentConfig(max_usd=0.50, max_spend_mode=True)   # reserve: 5% of max_usd, floor $0.02
+result = await agent.run(question)
+
+result.output       # the bail-out answer, from whatever it had gathered
+result.ok           # False — this is still not a clean run
+result.error_kind   # ErrorKind.MAX_SPEND, distinct from ErrorKind.BUDGET
+result.bailed_out   # True
+```
+
+Recording it as its own kind of error is the point. The arena needs to tell "this harness is
+bad" from "this harness ran out of money" from "the provider was down", because only the first
+is the agent's fault. `ErrorKind` is `max_spend`, `budget`, `provider`, `api`, `plan` or
+`other`, and it rides on every result, every SSE `run_end`, and every eval row.
+
+The reserve is an allowance, not a guarantee — a model call's price is only known once it has
+been made, so a bail-out can overshoot on its last call. What is guaranteed is that the real
+cost is recorded; `summary()` reports `reserve_usd` next to `reserve_used_usd`.
+
+The same call is available on its own, with no ceiling involved. Every agent has it:
+
+```python
+text = await agent.immediate_answer(state, question="…", reason="the run was cut short")
+```
+
+It gets no tools, deliberately: this is the call you make when there is no budget left to gather
+anything more.
+
+### 10. Calling an agent from anything
+
+The SSE route is right for a UI watching a trace appear and wrong for everything else. Every
+agent in the catalogue is also callable as plain JSON:
+
+```bash
+curl -X POST localhost:3600/api/agents/fermi/run \
+  -H 'content-type: application/json' \
+  -d '{"question":"How many piano tuners are in Chicago?","max_usd":0.25,"max_spend_mode":true}'
+```
+
+```json
+{ "agent_id": "fermi", "ok": true, "error_kind": null, "bailed_out": false,
+  "text": "About 130 piano tuners…",
+  "summary": { "total_usd": 0.0184, "calls": 2 } }
+```
+
+`GET /api/agents/{id}` describes one, and `POST /api/agents/{id}/answer` is `immediate_answer`
+over HTTP. A failed run is a 200 with `ok: false` — the run happened and its partial trace is
+evidence; only an unrunnable request is an error status.
+[`server/README.md`](server/README.md) has every route and its body.
+
 ### Troubleshooting
 
 | Symptom | Cause |
@@ -311,6 +422,10 @@ and how to register a new API — which is one `APISpec` literal and no client c
 | `[503] no available model provider` | Structured-output steps set `provider.require_parameters`, so a model whose endpoints do not support `json_schema` routes nowhere. Pick another `--model` |
 | `[429]` in the trace's `retries` | Normal. Backed off and retried; the `Retry-After` header pauses every in-flight call, not just the one that lost |
 | `ModuleNotFoundError: rsi_arena` | Run from the repo root, or `pip install -e .` |
+| `ModuleNotFoundError: rsi_arena.llm` after an upgrade | The runtime is packages now: `rsi_arena.llm.client`, `rsi_arena.api.spec`, `rsi_arena.core.costs`, `rsi_arena.agent.steps`. Every common name is still re-exported from `rsi_arena` itself |
+| An eval returns `scorer_error` | The scorer raised. Its exception is in `score.notes` — a broken scorer is a failed row, not a lost run |
+| `bad scorer: unknown scorer ...` | `GET /api/scorers` lists what a spec may name; `register_scorer` adds your own |
+| A run reports `error_kind: "max_spend"` | It hit its ceiling and answered from state instead of stopping with nothing. `bailed_out` is `true`, and the answer is in `output` |
 | A run costs more than expected | `--trace` breaks cost down per step; `result.trace.costs.summary()` breaks it down by kind and by name |
 | The UI says it cannot reach the backend | `python -m server` is not running, or it is on a different port than `NEXT_PUBLIC_API_BASE` |
 | The UI says a key is missing but you exported it | It reads the *backend's* environment. Export it in the shell that starts `python -m server`, then restart it |
@@ -411,7 +526,7 @@ battle get the same one.
 | `SEARCHAPI_API_KEY` | Google search for the `pipeline` and `freeform` agents |
 | `OPENROUTER_BASE_URL` | Point the runtime at a gateway, proxy, or the local fake |
 | `SEARCHAPI_BASE_URL` | Same, for search |
-| `RSI_ARENA_DB` | Where battles and votes are stored. Default `./arena.db` |
+| `RSI_ARENA_DB` | Where battles and votes are stored. Default `./arena.db`. Eval results are in-process and do not use it |
 | `NEXT_PUBLIC_API_BASE` | Where the UI looks for the backend. Default `http://localhost:3600` |
 
 [`server/README.md`](server/README.md) documents the routes and the event stream;
@@ -420,14 +535,19 @@ battle get the same one.
 ## Status
 
 Early, but runnable end to end. The runtime in [`rsi_arena/`](rsi_arena/) works, with sample
-agents and offline tests; the [backend](server/) and [web app](web/) run battles live and record
-votes. The [topics](topics/) are specified and the Kalshi data layer for the sports and market
-topics is built.
+agents and an offline test suite; the [backend](server/) and [web app](web/) run battles live
+and record votes, every agent is callable as plain JSON, and [evals](rsi_arena/evals) score them
+without a human in the loop. The [topics](topics/) are specified and the Kalshi data layer for
+the sports and market topics is built.
 
 What is described above and not built: **ratings** — votes are counted, not turned into Elo,
 because an Elo number over a handful of votes looks authoritative and means nothing — and the
 **optimizer**, the loop that reads losing traces and writes the next generation of harnesses.
-That loop is the whole idea, and it is the part that does not exist yet.
+That loop is the whole idea, and it is the part that does not exist yet. Evals are half of what
+it will need: a fitness signal it can run itself, between the human votes.
+
+Eval results live in the process and die with it. The store interface is async and swappable
+precisely so that stops being true without anything above it changing.
 
 ## License
 

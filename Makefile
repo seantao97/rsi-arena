@@ -5,24 +5,26 @@
 # macOS/Linux box, where `python` often does not exist at all.
 PYTHON ?= python3
 
-.PHONY: help install test backend web demo fake clean
+.PHONY: help install test coverage backend web demo fake clean
 
 help:
-	@echo "make install    install python deps (runtime + backend)"
-	@echo "make test       run every offline test suite (no keys, no network)"
+	@echo "make install    install python deps (runtime + backend + test)"
+	@echo "make test       run the test suite (no keys, no network)"
+	@echo "make coverage   the same, with a coverage report"
 	@echo "make backend    FastAPI on :3600, real API calls, needs OPENROUTER_API_KEY"
 	@echo "make web        Next.js on :8050"
 	@echo "make fake       local stand-in for OpenRouter and SearchApi on :3601"
 	@echo "make demo       backend on :3600 wired to the fake — no keys, no spend"
 
 install:
-	$(PYTHON) -m pip install -e ".[server]"
+	$(PYTHON) -m pip install -e ".[server,dev]"
 	cd web && npm install
 
 test:
-	$(PYTHON) tests/test_end_to_end.py
-	$(PYTHON) tests/test_examples.py
-	$(PYTHON) tests/test_server.py
+	$(PYTHON) -m pytest
+
+coverage:
+	$(PYTHON) -m pytest --cov=rsi_arena --cov=server --cov-report=term-missing
 
 backend:
 	$(PYTHON) -m server --reload

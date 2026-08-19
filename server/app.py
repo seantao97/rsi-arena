@@ -1,16 +1,19 @@
 """FastAPI app. Runs on port 3600; the web app on 8050 is its only client.
 
-Routes:
+Routes defined here — the arena itself:
 
-======================  =========================================================
-``GET  /api/health``    Which keys are present, so the UI can say so up front
-``GET  /api/agents``    The catalogue, with each agent's plan and requirements
-``GET  /api/models``    OpenRouter's model list, structured-output capable first
-``POST /api/run``       One agent. **SSE.**
-``POST /api/battle``    Two agents concurrently, blind by default. **SSE.**
-``POST /api/vote``      Record a vote and reveal who was who
+========================  =======================================================
+``GET  /api/health``      Which keys are present, so the UI can say so up front
+``GET  /api/models``      OpenRouter's model list, structured-output capable first
+``POST /api/run``         One agent. **SSE.**
+``POST /api/battle``      Two agents concurrently, blind by default. **SSE.**
+``POST /api/vote``        Record a vote and reveal who was who
 ``GET  /api/leaderboard`` Win/loss counts per agent
-======================  =========================================================
+========================  =======================================================
+
+Mounted from next door: :mod:`server.agents` (``/api/agents/...`` — the
+catalogue and the non-streaming way to call any agent) and :mod:`server.evals`
+(``/api/evals/...`` — run an eval, score it, store it).
 
 Both streaming routes are POST, so the browser uses ``fetch`` and reads the
 body rather than ``EventSource`` (which is GET-only). The event format is
@@ -19,12 +22,11 @@ identical either way.
 One :class:`LLMClient` is shared by every request. That is the point rather
 than an optimisation: its rate limiter and cache are shared too, so two agents
 in a battle cannot outspend each other on retries, and a repeated search is
-paid for once.
+paid for once. See :mod:`server.state`.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 import random
 from contextlib import asynccontextmanager
@@ -35,10 +37,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from rsi_arena import Agent, AgentConfig, APIClient, LLMClient, MemoryCache
+from rsi_arena import Agent, AgentConfig, APIClient, InMemoryEvalStore, LLMClient, MemoryCache
 
-from .catalogue import BUILDERS, REQUIRES, build, catalogue
+from . import agents as agents_routes
+from . import evals as evals_routes
+from .catalogue import build
 from .events import RunStream
+from .state import Limits, check, state
 from .store import Store
 
 WEB_ORIGINS = [
@@ -67,6 +72,11 @@ class RunRequest(BaseModel):
     temperature: float | None = None
     max_usd: float = Field(default=2.00, ge=0.001, le=20.0)
     cache: bool = True
+    max_spend_mode: bool = Field(
+        default=False,
+        description="At the ceiling, answer from state instead of stopping with nothing. "
+                    "The run_end event still reports error_kind='max_spend'.",
+    )
 
 
 class BattleRequest(BaseModel):
@@ -77,6 +87,7 @@ class BattleRequest(BaseModel):
     temperature: float | None = None
     max_usd: float = Field(default=2.00, ge=0.001, le=20.0)
     cache: bool = True
+    max_spend_mode: bool = False
     blind: bool = True
     shuffle: bool = True
 
@@ -87,24 +98,13 @@ class VoteRequest(BaseModel):
     reason: str = ""
 
 
-class State:
-    """Process-wide singletons, created on startup and closed on shutdown."""
-
-    llm: LLMClient
-    api: APIClient
-    store: Store
-    battles: dict[str, dict[str, Any]]
-
-
-state = State()
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     cache = MemoryCache(max_entries=8192)
     state.llm = LLMClient(cache=cache)
     state.api = APIClient(cache=cache)
     state.store = Store()
+    state.evals = InMemoryEvalStore()
     state.battles = {}
     try:
         yield
@@ -120,6 +120,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(agents_routes.router)
+app.include_router(evals_routes.router)
 
 SSE_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
@@ -131,24 +133,13 @@ SSE_HEADERS = {
 
 
 def _config(req: RunRequest | BattleRequest) -> AgentConfig:
-    overrides: dict[str, Any] = {"max_usd": req.max_usd, "cache": req.cache}
-    if req.model:
-        overrides["default_model"] = req.model
-    if req.temperature is not None:
-        overrides["temperature"] = req.temperature
-    return AgentConfig(**{**AgentConfig().model_dump(), **overrides})
-
-
-def _missing_keys(agent_id: str) -> list[str]:
-    return [k for k in REQUIRES.get(agent_id, []) if not os.environ.get(k)]
-
-
-def _check(agent_id: str) -> None:
-    if agent_id not in BUILDERS:
-        raise HTTPException(404, f"unknown agent {agent_id!r}")
-    missing = _missing_keys(agent_id)
-    if missing:
-        raise HTTPException(400, f"{agent_id} needs {', '.join(missing)} in the environment")
+    return Limits(
+        model=req.model,
+        temperature=req.temperature,
+        max_usd=req.max_usd,
+        cache=req.cache,
+        max_spend_mode=req.max_spend_mode,
+    ).config()
 
 
 async def _run_agent(
@@ -171,6 +162,8 @@ async def _run_agent(
     return {
         "ok": result.ok,
         "error": result.error,
+        "error_kind": result.error_kind.value if result.error_kind else None,
+        "bailed_out": result.bailed_out,
         "output": result.output,
         "summary": result.summary(),
         "trace": result.trace.model_dump(),
@@ -188,11 +181,6 @@ async def health() -> dict[str, Any]:
             "SEARCHAPI_API_KEY": bool(os.environ.get("SEARCHAPI_API_KEY")),
         },
     }
-
-
-@app.get("/api/agents")
-async def agents() -> list[dict[str, Any]]:
-    return [{**entry, "missing_keys": _missing_keys(entry["id"])} for entry in catalogue()]
 
 
 @app.get("/api/models")
@@ -221,7 +209,7 @@ async def models() -> list[dict[str, Any]]:
 
 @app.post("/api/run")
 async def run(req: RunRequest) -> StreamingResponse:
-    _check(req.agent)
+    check(req.agent)
     agent = build(req.agent, _config(req), state.api)
     stream = RunStream()
     stream.add("a", lambda: _run_agent(agent, req.question, stream, "a"))
@@ -231,7 +219,7 @@ async def run(req: RunRequest) -> StreamingResponse:
 @app.post("/api/battle")
 async def battle(req: BattleRequest) -> StreamingResponse:
     for agent_id in (req.agent_a, req.agent_b):
-        _check(agent_id)
+        check(agent_id)
 
     left, right = req.agent_a, req.agent_b
     # Sides are randomised so a voter's position bias does not always land on

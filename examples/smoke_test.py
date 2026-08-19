@@ -22,7 +22,7 @@ from typing import Annotated
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rsi_arena import Agent, AgentConfig, Plan, PromptStep, Toolbox, ToolStep, tool  # noqa: E402
-from rsi_arena.template import evaluate  # noqa: E402
+from rsi_arena.core.template import evaluate  # noqa: E402
 
 CONTEXT = """You are a careful estimator. You decompose a quantity into factors you can
 defend, state each assumption plainly, and never state more precision than the weakest

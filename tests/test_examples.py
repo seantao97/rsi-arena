@@ -1,4 +1,4 @@
-"""Run the sample agents against a fake OpenRouter and a fake SearchApi.
+"""The sample agents, end to end against the fake backend.
 
 Catches the failure mode that only shows up on a real run and costs money to
 find: a ``{{placeholder}}`` that never resolves, a loop condition that names
@@ -7,133 +7,111 @@ something not in state, a schema a step cannot fill.
 
 from __future__ import annotations
 
-import asyncio
-import json
-import sys
-from pathlib import Path
+import pytest
 
-import httpx
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from examples import smoke_test, web_research  # noqa: E402
-from rsi_arena import APIClient, AgentConfig, LLMClient, LLMConfig, MemoryCache, RateLimit  # noqa: E402
-
-USAGE = {"prompt_tokens": 800, "completion_tokens": 150, "total_tokens": 950, "cost": 0.0031}
-CALLS = {"search": 0}
+from examples import smoke_test, web_research
+from rsi_arena import AgentConfig, APIClient, LLMClient, Toolbox
 
 
-def _reply(model: str, content: str) -> httpx.Response:
-    return httpx.Response(200, json={
-        "id": "gen", "model": model, "usage": USAGE,
-        "choices": [{"finish_reason": "stop",
-                     "message": {"role": "assistant", "content": content}}]})
+@pytest.fixture
+def tools(api: APIClient) -> Toolbox:
+    return web_research.search_tools(api)
 
 
-def openrouter(request: httpx.Request) -> httpx.Response:
-    """Answer a chat completion, in SSE form when the request asked to stream."""
-    body = json.loads(request.content)
-    response = _answer(body)
-    return _as_sse(response, body) if body.get("stream") else response
+@pytest.fixture
+def agents(config: AgentConfig, tools: Toolbox) -> dict:
+    return {
+        "pipeline": web_research.pipeline_agent(config, tools),
+        "freeform": web_research.freeform_agent(config, tools),
+        "plugin": web_research.plugin_agent(config),
+        "fermi": smoke_test.build_agent("test/model"),
+    }
 
 
-def _as_sse(response: httpx.Response, body: dict) -> httpx.Response:
-    """Re-cut a finished response as deltas, the way OpenRouter sends them."""
-    payload = response.json()
-    content = payload["choices"][0]["message"].get("content") or ""
-    pieces = [content[i:i + 12] for i in range(0, len(content), 12)] or [""]
-    chunks = [{"id": payload["id"], "model": payload["model"],
-               "choices": [{"delta": {"content": piece}}]} for piece in pieces]
-    chunks.append({"id": payload["id"], "model": payload["model"], "usage": payload["usage"],
-                   "choices": [{"delta": {}, "finish_reason": "stop"}]})
-    text = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
-    return httpx.Response(200, text=text, headers={"content-type": "text/event-stream"})
+QUESTIONS = {
+    "pipeline": "Did the ECB cut rates in July 2026?",
+    "freeform": "Did the ECB cut rates in July 2026?",
+    "plugin": "Did the ECB cut rates in July 2026?",
+    "fermi": "How many piano tuners are there in Chicago?",
+}
 
 
-def _answer(body: dict) -> httpx.Response:
-    model = body["model"]
-    fmt = body.get("response_format")
-
-    if body.get("tools") and not any(m["role"] == "tool" for m in body["messages"]):
-        return httpx.Response(200, json={
-            "id": "gen", "model": model, "usage": USAGE,
-            "choices": [{"finish_reason": "tool_calls", "message": {
-                "role": "assistant", "content": "",
-                "tool_calls": [{"id": "c1", "type": "function", "function": {
-                    "name": "search", "arguments": json.dumps({"q": "ecb july 2026"})}}]}}]})
-
-    if fmt:
-        name = fmt["json_schema"]["name"]
-        payloads = {
-            "plan_queries": {"queries": ["ecb rate decision july 2026", "ecb press release"],
-                             "what_would_settle_it": "The ECB press release."},
-            "take_notes": {"claims": [{"claim": "The ECB held rates.",
-                                       "url": "https://ecb.europa.eu/x", "date": "2026-07-24",
-                                       "confidence": 0.9}],
-                           "still_missing": "nothing", "sufficient": True},
-            "stop_check": {"done": True, "reason": "sourced"},
-            "decompose": {"expression": "2.7e6 / 4 * 0.02", "weakest_factor": "tuners per piano",
-                          "factors": [{"name": "population", "value": "2.7e6",
-                                       "justification": "Chicago city population."}]},
-        }
-        return _reply(model, json.dumps(payloads.get(name, {})))
-
-    return _reply(model, "The ECB held rates at its July 2026 meeting "
-                         "(https://ecb.europa.eu/x). This changes if the press release is revised.")
+@pytest.mark.parametrize("name", ["pipeline", "freeform", "plugin", "fermi"])
+async def test_the_sample_agent_runs(name, agents, llm: LLMClient):
+    agent = agents[name]
+    result = await agent.run(QUESTIONS[name], llm=llm)
+    assert result.ok, f"{agent.name} failed: {result.error}\n{result.trace.render()}"
+    assert result.output, f"{agent.name} produced nothing"
+    assert result.cost_usd > 0 and result.trace.costs.calls > 0
 
 
-def searchapi(request: httpx.Request) -> httpx.Response:
-    CALLS["search"] += 1
-    return httpx.Response(200, json={
-        "search_parameters": {"q": request.url.params.get("q")},
-        "search_information": {"total_results": 12},
-        "organic_results": [{"position": 1, "title": "ECB press release",
-                             "link": "https://ecb.europa.eu/x", "date": "24 Jul 2026",
-                             "snippet": "The Governing Council decided to hold rates."}],
-        "answer_box": {"type": "organic", "answer": "Held", "link": "https://ecb.europa.eu/x"},
-    })
+async def test_the_pipeline_searches_and_collects_evidence(agents, llm: LLMClient, fake):
+    result = await agents["pipeline"].run(QUESTIONS["pipeline"], llm=llm)
+    assert result.state["evidence"], "the loop collected nothing"
+    assert fake.search_calls >= 1, "the pipeline never searched"
 
 
-def router(request: httpx.Request) -> httpx.Response:
-    return openrouter(request) if "openrouter" in request.url.host else searchapi(request)
+async def test_the_freeform_agent_drives_the_same_tools_itself(agents, llm: LLMClient):
+    result = await agents["freeform"].run(QUESTIONS["freeform"], llm=llm)
+    tool_spans = [s for s in result.trace.spans() if s.kind == "tool"]
+    assert tool_spans, "the model should have called a search tool"
 
 
-async def main() -> None:
-    import os
-
-    os.environ.setdefault("SEARCHAPI_API_KEY", "test-key")
-    transport = httpx.MockTransport(router)
-    http = httpx.AsyncClient(transport=transport)
-    cache = MemoryCache()
-    config = AgentConfig(default_model="test/model", max_usd=2.0)
-    llm = LLMClient(api_key="test", cache=cache, http_client=http, auto_pricing=False,
-                    config=config.to_llm_config(), rate_limit=RateLimit(per_second=1000))
-    api = APIClient(cache=cache, http_client=http)
-    tools = web_research.search_tools(api)
-
-    agents = [
-        web_research.pipeline_agent(config, tools),
-        web_research.freeform_agent(config, tools),
-        web_research.plugin_agent(config),
-        smoke_test.build_agent("test/model"),
-    ]
-    questions = ["Did the ECB cut rates in July 2026?"] * 3 + ["How many piano tuners in Chicago?"]
-
-    results = await asyncio.gather(*(a.run(q, llm=llm) for a, q in zip(agents, questions)))
-    for agent, result in zip(agents, results):
-        assert result.ok, f"{agent.name} failed: {result.error}\n{result.trace.render()}"
-        assert result.output, f"{agent.name} produced nothing"
-        print(f"{agent.name:24s} ok  ${result.cost_usd:.4f}  "
-              f"{result.trace.costs.calls} calls  {len(list(result.trace.spans()))} spans")
-
-    pipeline = results[0]
-    assert pipeline.state["evidence"], "loop collected nothing"
-    assert CALLS["search"] >= 1, "the pipeline never searched"
-    print(f"\nsearch API called {CALLS['search']}x (rest served from cache)")
-    print(pipeline.trace.render())
-    await http.aclose()
-    print("\nall sample agents ran")
+async def test_the_plugin_agent_needs_no_search_key(agents, llm: LLMClient, fake):
+    result = await agents["plugin"].run(QUESTIONS["plugin"], llm=llm)
+    assert result.ok and fake.search_calls == 0
+    assert any("plugins" in body for body in fake.bodies), "the web plugin should be requested"
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+async def test_the_fermi_agent_uses_its_calculator(agents, llm: LLMClient):
+    result = await agents["fermi"].run(QUESTIONS["fermi"], llm=llm)
+    assert any(s.name == "calculator" for s in result.trace.spans())
+    assert isinstance(result.state["value"], float)
+
+
+async def test_repeated_searches_are_paid_for_once(agents, llm: LLMClient, fake):
+    # The sharing that also makes an arena battle fair.
+    await agents["pipeline"].run(QUESTIONS["pipeline"], llm=llm)
+    before = fake.search_calls
+    await agents["pipeline"].run(QUESTIONS["pipeline"], llm=llm)
+    assert fake.search_calls == before, "the second run should be served from the cache"
+
+
+async def test_every_sample_agent_round_trips_through_json(agents, tools: Toolbox):
+    from rsi_arena import Agent
+
+    for name, agent in agents.items():
+        toolbox = agent.tools if name == "fermi" else tools
+        rebuilt = Agent.from_dict(agent.to_dict(), tools=toolbox)
+        assert rebuilt.to_dict() == agent.to_dict(), name
+
+
+# --- the eval example -------------------------------------------------------
+
+
+async def test_the_eval_example_runs_end_to_end(config: AgentConfig, api: APIClient,
+                                                llm: LLMClient):
+    from examples import evals as eval_example
+    from rsi_arena import EvalSuite
+
+    agents = eval_example.build_agents(["fermi", "plugin"], config, api)
+    suite = EvalSuite.over(agents, eval_example.CASES, name="samples")
+    result = await suite.run(llm=llm)
+
+    assert len(result.results) == len(agents) * len(eval_example.CASES)
+    agg = result.aggregate()
+    assert agg["evals"] == len(result.results) and agg["cost_usd"] > 0
+    assert result.table()
+
+
+async def test_the_eval_example_records_a_bailout_under_max_spend(config: AgentConfig,
+                                                                  api: APIClient, llm: LLMClient):
+    from examples import evals as eval_example
+    from rsi_arena import EvalSuite
+
+    tight = config.model_copy(update={"max_usd": 0.002, "cache": False, "max_spend_mode": True})
+    agents = eval_example.build_agents(["pipeline"], tight, api)
+    result = await EvalSuite.over(agents, eval_example.CASES[:1]).run(llm=llm)
+
+    assert result.results[0].bailed_out is True
+    assert result.aggregate()["bailed_out"] == 1
