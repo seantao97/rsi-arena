@@ -18,8 +18,10 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from ..api import APISpec, BearerAuth, Endpoint, Param, register_api
-from ..ratelimit import RateLimit
+from ...core.ratelimit import RateLimit
+from ..auth import BearerAuth
+from ..registry import register_api
+from ..spec import APISpec, Endpoint, Param
 
 # SearchApi bills per successful search. The paid plans land around $0.004 per
 # search; override with ``SEARCHAPI_SPEC.cost_per_call = ...`` if your plan

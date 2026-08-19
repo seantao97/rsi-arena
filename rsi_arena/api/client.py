@@ -1,270 +1,28 @@
-"""Generic API client and registry.
+"""Executes any :class:`~rsi_arena.api.spec.APISpec`.
 
-Defining a new API is meant to be one declaration and nothing else:
-
-.. code-block:: python
-
-    NWS = APISpec(
-        name="nws",
-        base_url="https://api.weather.gov",
-        auth=NoAuth(),
-        rate_limit=RateLimit(per_second=5),
-        endpoints=[
-            Endpoint("forecast", "/gridpoints/{office}/{grid_x},{grid_y}/forecast",
-                     required=["office", "grid_x", "grid_y"]),
-        ],
-    )
-    register_api(NWS)
-
-After that, ``await api.call("nws", "forecast", office="OKX", grid_x=33, grid_y=37)``
-works, it is retried, rate limited, cached and costed like everything else,
-and ``NWS.as_tool("forecast")`` hands the same endpoint to an LLM as a
-callable tool with a generated JSON Schema.
-
-The split is deliberate: :class:`APISpec` is *declarative data* — no HTTP, no
-state, serialisable, safe to define in a user's own module — while
-:class:`APIClient` owns the connection pool, the limiters and the cache. That
-is what makes third-party API definitions cheap: they are data, not plumbing.
-Anything genuinely custom hooks in through the ``parse`` and ``cost``
-callables on an endpoint rather than by subclassing a client.
+Retries, per-API rate limits, caching and cost, in one client that serves
+every registered API. Limiters are per-API and created on first use, so two
+agents hitting the same vendor share one budget instead of each getting their
+own.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Literal
+from typing import Any, Iterable
 
 import httpx
 from pydantic import BaseModel, Field
 
-from .cache import Cache, default_cache, make_key
-from .costs import Cost
-from .ratelimit import RateLimit, RateLimiter
-from .retry import RetryPolicy, with_retry
-from .trace import Tracer, current_span
-
-
-class APIError(RuntimeError):
-    def __init__(self, api: str, status: int | None, message: str, retry_after: float | None = None):
-        super().__init__(f"{api}: [{status}] {message}")
-        self.api = api
-        self.status = status
-        self.message = message
-        self.retry_after = retry_after
-
-    @property
-    def retryable(self) -> bool:
-        return self.status in {408, 409, 425, 429, 500, 502, 503, 504}
-
-
-class MissingCredential(RuntimeError):
-    """The API needs a key and the environment does not have one."""
-
-
-# --- auth -------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Auth:
-    """Base auth. Subclasses mutate the outgoing headers/params in place."""
-
-    env_var: str | None = None
-    required: bool = True
-
-    def key(self, api: str) -> str:
-        if not self.env_var:
-            return ""
-        value = os.environ.get(self.env_var, "")
-        if not value and self.required:
-            raise MissingCredential(f"{api} needs {self.env_var} in the environment")
-        return value
-
-    def apply(self, api: str, headers: dict[str, str], params: dict[str, Any]) -> None:
-        return None
-
-
-@dataclass(frozen=True)
-class NoAuth(Auth):
-    required: bool = False
-
-
-@dataclass(frozen=True)
-class BearerAuth(Auth):
-    def apply(self, api: str, headers: dict[str, str], params: dict[str, Any]) -> None:
-        headers["Authorization"] = f"Bearer {self.key(api)}"
-
-
-@dataclass(frozen=True)
-class HeaderAuth(Auth):
-    header: str = "X-API-Key"
-    prefix: str = ""
-
-    def apply(self, api: str, headers: dict[str, str], params: dict[str, Any]) -> None:
-        headers[self.header] = f"{self.prefix}{self.key(api)}"
-
-
-@dataclass(frozen=True)
-class QueryAuth(Auth):
-    param: str = "api_key"
-
-    def apply(self, api: str, headers: dict[str, str], params: dict[str, Any]) -> None:
-        params[self.param] = self.key(api)
-
-
-# --- declarations -----------------------------------------------------------
-
-ParamType = Literal["string", "number", "integer", "boolean"]
-
-
-@dataclass(frozen=True)
-class Param:
-    """One accepted parameter. Doubles as the JSON Schema for tool exposure."""
-
-    name: str
-    description: str = ""
-    type: ParamType = "string"
-    required: bool = False
-    default: Any = None
-    enum: list[Any] | None = None
-
-    def to_schema(self) -> dict[str, Any]:
-        schema: dict[str, Any] = {"type": self.type}
-        if self.description:
-            schema["description"] = self.description
-        if self.enum:
-            schema["enum"] = self.enum
-        return schema
-
-
-@dataclass(frozen=True)
-class Endpoint:
-    """One callable operation on an API.
-
-    ``path`` may contain ``{placeholders}``, which are filled from the call
-    parameters and then dropped from the query string.
-
-    ``parse`` reshapes the raw JSON into whatever the caller actually wants —
-    the single most valuable hook here, because raw search-engine JSON is
-    enormous and an agent should not be paying tokens to read it.
-    """
-
-    name: str
-    path: str = ""
-    method: str = "GET"
-    description: str = ""
-    params: tuple[Param, ...] = ()
-    defaults: dict[str, Any] = field(default_factory=dict)
-    body_params: tuple[str, ...] = ()
-    parse: Callable[[Any], Any] | None = None
-    cost_usd: float | None = None
-    cache_ttl_s: float | None = None
-
-    def schema(self) -> dict[str, Any]:
-        """JSON Schema for the parameters, used when exposing this as a tool."""
-        return {
-            "type": "object",
-            "properties": {p.name: p.to_schema() for p in self.params},
-            "required": [p.name for p in self.params if p.required],
-            "additionalProperties": False,
-        }
-
-
-@dataclass
-class APISpec:
-    """Everything needed to talk to one API. Data only — no connections."""
-
-    name: str
-    base_url: str
-    endpoints: Iterable[Endpoint] = ()
-    auth: Auth = field(default_factory=NoAuth)
-    headers: dict[str, str] = field(default_factory=dict)
-    defaults: dict[str, Any] = field(default_factory=dict)
-    rate_limit: RateLimit = field(default_factory=lambda: RateLimit(per_second=5, concurrency=5))
-    retry: RetryPolicy = field(default_factory=RetryPolicy)
-    timeout_s: float = 30.0
-    cost_per_call: float = 0.0
-    cache_ttl_s: float | None = None
-    description: str = ""
-
-    def __post_init__(self) -> None:
-        self._by_name = {e.name: e for e in self.endpoints}
-
-    def endpoint(self, name: str) -> Endpoint:
-        try:
-            return self._by_name[name]
-        except KeyError:
-            known = ", ".join(sorted(self._by_name)) or "none"
-            raise KeyError(f"{self.name} has no endpoint {name!r} (have: {known})") from None
-
-    def endpoint_names(self) -> list[str]:
-        return sorted(self._by_name)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "base_url": self.base_url,
-            "description": self.description,
-            "auth": type(self.auth).__name__,
-            "auth_env": self.auth.env_var,
-            "cost_per_call": self.cost_per_call,
-            "endpoints": {
-                e.name: {"method": e.method, "path": e.path, "description": e.description,
-                         "schema": e.schema()}
-                for e in self._by_name.values()
-            },
-        }
-
-
-# --- registry ---------------------------------------------------------------
-
-
-class Registry:
-    """Name → :class:`APISpec`. Global by default; instantiate for tests."""
-
-    def __init__(self) -> None:
-        self._specs: dict[str, APISpec] = {}
-
-    def register(self, spec: APISpec, *, replace: bool = False) -> APISpec:
-        if spec.name in self._specs and not replace:
-            raise ValueError(f"api {spec.name!r} already registered; pass replace=True to override")
-        self._specs[spec.name] = spec
-        return spec
-
-    def get(self, name: str) -> APISpec:
-        try:
-            return self._specs[name]
-        except KeyError:
-            known = ", ".join(sorted(self._specs)) or "none"
-            raise KeyError(f"unknown api {name!r} (registered: {known})") from None
-
-    def names(self) -> list[str]:
-        return sorted(self._specs)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {name: spec.to_dict() for name, spec in sorted(self._specs.items())}
-
-
-registry = Registry()
-
-
-def default_registry() -> Registry:
-    return registry
-
-
-def register_api(spec: APISpec, *, replace: bool = False) -> APISpec:
-    """Add a spec to the global registry and hand it back, so this works:
-
-    ``MY_API = register_api(APISpec(...))``
-    """
-    return registry.register(spec, replace=replace)
-
-
-def get_api(name: str) -> APISpec:
-    return registry.get(name)
-
+from ..core.cache import Cache, default_cache, make_key
+from ..core.costs import Cost
+from ..core.ratelimit import RateLimiter
+from ..core.retry import with_retry
+from ..core.trace import Tracer, current_span
+from .errors import APIError
+from .registry import Registry, default_registry
+from .spec import APISpec, Endpoint
 
 # --- responses --------------------------------------------------------------
 

@@ -18,7 +18,7 @@ it is the comparison the sample agents make:
 
 Search comes from SearchApi.io (``rsi_arena/apis/searchapi.py``), the first
 registered API. Adding a second source is one ``APISpec`` literal — see the
-module docstring in ``rsi_arena/api.py``.
+module docstring in ``rsi_arena/api/__init__.py``.
 
     export OPENROUTER_API_KEY=...
     export SEARCHAPI_API_KEY=...          # not needed for --agent plugin
@@ -42,7 +42,7 @@ from rsi_arena import (  # noqa: E402
     Agent, AgentConfig, APIClient, LLMClient, LoopStep, Plan, PromptStep, Toolbox, ToolStep,
     WebSearch, api_tool,
 )
-from rsi_arena.apis import SEARCHAPI  # noqa: E402  (importing registers it)
+from rsi_arena.api.apis import SEARCHAPI  # noqa: E402  (importing registers it)
 
 # The orchestration prompt. Identical across all three agents on purpose: if
 # the context differs, a battle between them measures the context and not the

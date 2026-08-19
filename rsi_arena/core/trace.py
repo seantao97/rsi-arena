@@ -165,6 +165,7 @@ class Tracer:
         # ``queue.put_nowait``; anything slower belongs on the other side of
         # that queue, not here.
         self.on_event = on_event
+        self._finished = False
 
     def emit(self, type: str, **payload: Any) -> None:
         """Notify the listener. A broken listener must never fail a run."""
@@ -233,7 +234,7 @@ class Tracer:
 
         Both, because the span answers "what did this step cost" and the
         ledger answers "have we hit the ceiling" — and the ledger raises
-        :class:`~rsi_arena.costs.BudgetExceeded` from here when it has.
+        :class:`~rsi_arena.core.costs.BudgetExceeded` from here when it has.
         """
         target = span or self.current()
         target.cost = cost
@@ -250,6 +251,15 @@ class Tracer:
         )
 
     def finish(self, output: Any = None, error: BaseException | None = None) -> Trace:
+        """Close the run. Idempotent: a second call returns the same trace.
+
+        Idempotent because callers close traces in ``finally`` blocks, and a
+        tracer that raised on a double close would replace whatever error the
+        run actually hit with a confusing one about context variables.
+        """
+        if self._finished:
+            return self.trace
+        self._finished = True
         if output is not None:
             self.root.set_output(output)
         if error is not None:
@@ -262,7 +272,9 @@ class Tracer:
         self.emit("span_end", span=_span_event(self.root))
         try:
             _current_span.reset(self._token)
-        except ValueError:
+        except (ValueError, RuntimeError):
+            # A different context, or already reset. Either way the invariant
+            # we want is simply that no span is left current.
             _current_span.set(None)
         return self.trace
 
