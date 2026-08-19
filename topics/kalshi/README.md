@@ -10,6 +10,8 @@ collector that records the answers at high frequency.
 | *What was it worth at 14:03, or over its whole life?* | [`history.py`](history.py) — candlesticks from the API, open or settled markets |
 | *What is actually happening in the game?* | [`gamestate.py`](gamestate.py) — scores, situation and play-by-play |
 | *Which game is this market about?* | [`linking.py`](linking.py) — parses fixtures out of event tickers and matches them to the game feed |
+| *Is anything priced inconsistently?* | [`coherence.py`](coherence.py) — no-arb checks across related markets, net of fees |
+| *Is there edge left after costs?* | [`fees.py`](fees.py) — fee schedule, breakeven, Kelly, CLV |
 | *Record all of it* | [`recorder.py`](recorder.py), [`storage.py`](storage.py) |
 
 Credentials are optional — [`credentials.py`](credentials.py) reads the same
@@ -56,6 +58,9 @@ h.closing_quote(ticker)                      # last two-sided quote — the CLV 
 h.event_history(event_ticker)                # every market on a fixture
 h.series_history(series, start, end, HOUR)   # a whole competition
 h.settlement(ticker)                         # "yes" / "no" / None
+h.trades(ticker, start, end)                 # the print tape, with taker side
+h.volume_profile(ticker)                     # contracts traded at each price
+h.rules(ticker)                              # settlement terms as written
 ```
 
 Three constraints, all found by hitting the endpoint:
@@ -131,6 +136,33 @@ is esports, Olympics, chess and four soccer leagues ESPN does not carry
 ESPN is undocumented. It has been stable for years but treat a schema change as
 expected rather than exceptional — every adapter normalises to the same
 `GameState`, so a break is contained to one function.
+
+## Coherence and costs
+
+A coherence violation needs no forecast: if "over 6.5 runs" can be bought below
+where "over 7.5 runs" can be sold, the first strictly contains the second and
+the difference is locked.
+
+```python
+Coherence().check_event(event_ticker)          # complement, partition, ladder
+Coherence().check_series("KXMLBSPREAD")        # sweep a competition
+```
+
+Two things make the difference between a real finding and a fake one:
+
+- **Executable prices only.** Buy at the ask, sell at the bid. Using mids
+  manufactures edge that cannot be traded.
+- **Fees netted off every leg.** A 1c gross edge at midprice is negative after
+  the 2c taker fee, and is suppressed.
+
+One event can hold **several independent ladders** — a spread event carries a
+full strike ladder per team, so SF over 1.5 and CLE over 1.5 are not a
+contradiction. Rungs are grouped by subject before anything is compared. An
+earlier version did not do this and reported a steady stream of fake arbitrage.
+
+`fees.py` is pure arithmetic, no API: `taker_fee` peaks at 1.75c at 50c and
+approaches zero in the tails, so `breakeven(0.68)` is 0.70 and a 2c edge at
+midprice is nothing.
 
 ## Storage
 
