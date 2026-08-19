@@ -112,13 +112,42 @@ All free and keyless as of 2026-08-17.
 
 | League | Source | Depth |
 |---|---|---|
-| MLB | `statsapi.mlb.com` (official) | Full play-by-play, pitch level, count, runners, current pitcher and batter |
+| MLB | `statsapi.mlb.com` (official) | Pitch-level play-by-play, count, runners, current pitcher and batter |
 | NHL | `api-web.nhle.com` (official) | Play-by-play, shifts |
-| NFL, NBA, WNBA, NCAA | ESPN public endpoints | Scores, situation, play-by-play |
-| 51 soccer competitions | ESPN, by validated slug | Scores, events, lineups |
+| 73 leagues | ESPN public endpoints | Scores, plays, boxscore, odds, rosters, injuries, venue |
 
-`taxonomy.SOCCER_COMPETITIONS` maps ticker stems to ESPN slugs, and every slug
-was checked against the live scoreboard endpoint. Routing is automatic:
+**One registry.** `taxonomy.COMPETITIONS` maps every league to its ESPN path —
+60 soccer competitions and 13 other leagues. Routing used to live in two tables
+that duplicated ten soccer leagues and agreed by luck; this is now the single
+source of truth and `gamestate` reads it.
+
+Soccer needs a row per *competition* because ESPN keys it that way —
+`soccer/eng.1` is the Premier League and `soccer/eng.fa` is the FA Cup, same
+clubs, different endpoints. Everything else needs one row per league. Soccer is
+also 45% of Kalshi's fixture-level sports, more than basketball, football and
+baseball combined, so the tail is worth carrying.
+
+### Comprehensive capture
+
+`game_detail()` returns everything a feed offers for one fixture in a single
+request — boxscore, sportsbook odds, predictions, rosters, injuries, leaders,
+win probability, standings, recent form, head-to-head, venue, officials,
+attendance and weather. Sections absent for the sport, or not yet populated at
+that stage of the game, come back empty rather than missing.
+
+```python
+d = gamestate.game_detail("EPL", event_id)
+d.book_lines                 # DraftKings, Bet365 — moneyline, spread, total
+d.fair_probabilities()       # de-vigged, sums to 1
+```
+
+**Soccer is three-way.** Home and away do not partition the outcome space; the
+draw does the rest. De-vigging them as a pair returns a *negative* overround —
+a book that appears to give money away — which is the signal that an outcome is
+missing. The draw is included when quoted, and an incomplete set is returned
+with `complete=False` rather than silently normalised.
+
+Routing is automatic:
 
 ```python
 gamestate.fixtures_for_series(series_class)          # picks the slug

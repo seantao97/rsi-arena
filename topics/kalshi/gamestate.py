@@ -32,48 +32,20 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from .taxonomy import COMPETITIONS
+
 MLB_API = "https://statsapi.mlb.com/api/v1"
 NHL_API = "https://api-web.nhle.com/v1"
 ESPN_API = "https://site.api.espn.com/apis/site/v2/sports"
 
-# league -> (espn_sport, espn_league). ESPN covers far more than the big four;
-# these paths were the ones worth wiring for Kalshi's actual sports coverage.
-ESPN_PATHS = {
-    # American
-    "NFL": ("football", "nfl"),
-    "NCAAF": ("football", "college-football"),
-    "NBA": ("basketball", "nba"),
-    "WNBA": ("basketball", "wnba"),
-    "NCAAB": ("basketball", "mens-college-basketball"),
-    "NHL": ("hockey", "nhl"),
-    "MLB": ("baseball", "mlb"),
-    # Soccer — domestic
-    "EPL": ("soccer", "eng.1"),
-    "EFL": ("soccer", "eng.2"),
-    "LALIGA": ("soccer", "esp.1"),
-    "SERIEA": ("soccer", "ita.1"),
-    "BUNDESLIGA": ("soccer", "ger.1"),
-    "LIGUE1": ("soccer", "fra.1"),
-    "MLS": ("soccer", "usa.1"),
-    "NWSL": ("soccer", "usa.nwsl"),
-    "BRASILEIRAO": ("soccer", "bra.1"),
-    # Soccer — continental
-    "UCL": ("soccer", "uefa.champions"),
-    "UEFA_OTHER": ("soccer", "uefa.europa"),
-    "INTERNATIONAL": ("soccer", "fifa.world"),
-    "CUP": ("soccer", "eng.fa"),
-    # Individual and other
-    "TENNIS": ("tennis", "atp"),
-    "GOLF": ("golf", "pga"),
-    "COMBAT": ("mma", "ufc"),
-    "MOTORSPORT": ("racing", "f1"),
-    "CRICKET": ("cricket", "league"),
-    "INTLBASKET": ("basketball", "nba"),
-}
+# Routing comes from taxonomy.COMPETITIONS — the single source of truth for
+# which league maps to which ESPN endpoint. This module used to keep its own
+# copy, which duplicated ten soccer leagues and kept them in step by luck.
+ESPN_PATHS = {lg: tuple(path.split("/", 1))
+              for lg, (_sport, path) in COMPETITIONS.items()}
 
-# The long tail of world soccer leagues, addressable by ESPN slug directly.
-# Kalshi lumps these under OTHERLEAGUE, so pass the slug explicitly when the
-# specific competition matters.
+# Kept for callers that want to reach a competition by name rather than by
+# Kalshi league code. Superset entries live in taxonomy.SOCCER_STEMS.
 SOCCER_SLUGS = {
     "eredivisie": "ned.1", "primeira": "por.1", "scottish": "sco.1",
     "belgian": "bel.1", "turkish": "tur.1", "greek": "gre.1",
@@ -98,6 +70,99 @@ class Play:
     scoring: bool = False
     players: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class GameDetail:
+    """Everything a feed will give about one fixture.
+
+    ``GameState`` is the normalised core — score, clock, plays. This is the rest
+    of it, and the sections are kept as the feed returned them rather than
+    flattened, because what is present varies by sport and by how far the game
+    has progressed. A pre-match fixture has odds and rosters but an empty
+    boxscore; a finished one has the reverse.
+    """
+
+    state: GameState
+    boxscore: dict[str, Any] = field(default_factory=dict)
+    odds: list[dict] = field(default_factory=list)
+    predictions: list[dict] = field(default_factory=list)   # ESPN pickcenter
+    injuries: list[dict] = field(default_factory=list)
+    rosters: list[dict] = field(default_factory=list)
+    leaders: list[dict] = field(default_factory=list)
+    win_probability: list[dict] = field(default_factory=list)
+    standings: dict[str, Any] = field(default_factory=dict)
+    last_five: list[dict] = field(default_factory=list)
+    season_series: list[dict] = field(default_factory=list)
+    venue: dict[str, Any] = field(default_factory=dict)
+    officials: list[dict] = field(default_factory=list)
+    attendance: int | None = None
+    weather: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def book_lines(self) -> list[dict]:
+        """Odds normalised to ``{provider, moneyline_home, moneyline_away,
+        spread, total}``.
+
+        ESPN carries live sportsbook prices, which is the only cross-venue
+        reference in the package — everything else here is Kalshi's own view.
+        """
+        out = []
+        for o in self.odds:
+            home = (o.get("homeTeamOdds") or {}).get("moneyLine")
+            away = (o.get("awayTeamOdds") or {}).get("moneyLine")
+            out.append({
+                "provider": (o.get("provider") or {}).get("name", ""),
+                "moneyline_home": home, "moneyline_away": away,
+                "spread": o.get("spread"), "total": o.get("overUnder"),
+                "over_odds": o.get("overOdds"), "under_odds": o.get("underOdds"),
+                "details": o.get("details", ""),
+            })
+        return out
+
+    def fair_probabilities(self, method: str = "proportional") -> dict | None:
+        """De-vigged outcome probabilities from the best book line available.
+
+        The only cross-venue reference in the package. Comparing a Kalshi price
+        to a raw moneyline overstates edge by roughly half the vig, so the
+        margin is removed first.
+
+        **Soccer is three-way.** Home and away alone do not partition the
+        outcome space — the draw does the rest — so de-vigging them as a pair
+        produces nonsense. The draw is included when the book quotes it, and if
+        the raw probabilities still sum below 1 the result is returned with
+        ``complete=False`` rather than silently normalised, because a negative
+        overround means an outcome is missing rather than that the book is
+        generous.
+        """
+        from .implied import american_to_prob, devig, overround
+
+        for line, raw_odds in zip(self.book_lines, self.odds):
+            home, away = line["moneyline_home"], line["moneyline_away"]
+            if home is None or away is None:
+                continue
+            draw = (raw_odds.get("drawOdds") or {}).get("moneyLine")
+
+            labels = ["home", "away"] + (["draw"] if draw is not None else [])
+            odds = [float(home), float(away)] + ([float(draw)] if draw is not None else [])
+            raw = [american_to_prob(o) for o in odds]
+            margin = overround(raw)
+            complete = margin >= 0
+
+            fair = devig(raw, method) if complete else raw
+            out = {"provider": line["provider"], "overround": margin,
+                   "complete": complete, "outcomes": labels,
+                   "spread": line["spread"], "total": line["total"]}
+            for label, f, r in zip(labels, fair, raw):
+                out[f"{label}_fair"] = f
+                out[f"{label}_raw"] = r
+            return out
+        return None
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["state"] = self.state.to_dict()
+        return d
 
 
 @dataclass
@@ -267,6 +332,16 @@ def espn_game_state(league: str, event_id: str, with_plays: bool = True) -> Game
 def _espn_state_by_slug(sport: str, lg: str, event_id: str,
                         with_plays: bool, league_label: str) -> GameState:
     data = _get(f"{ESPN_API}/{sport}/{lg}/summary?event={event_id}", throttle=True)
+    return _state_from_summary(data, league_label, event_id, with_plays)
+
+
+def _state_from_summary(data: dict, league: str, event_id: str,
+                        with_plays: bool = True) -> GameState:
+    """Normalise an ESPN summary payload into a GameState.
+
+    Split out so ``game_detail`` can parse the state from the payload it already
+    has rather than paying for a second request.
+    """
     comp = (data.get("header", {}).get("competitions") or [{}])[0]
     competitors = comp.get("competitors", [])
     home = next((c for c in competitors if c.get("homeAway") == "home"), {})
@@ -280,15 +355,15 @@ def _espn_state_by_slug(sport: str, lg: str, event_id: str,
         for p in (data.get("plays") or []):
             plays.append(Play(
                 ts=p.get("wallclock", ""),
-                period=str(p.get("period", {}).get("number", "")),
-                clock=p.get("clock", {}).get("displayValue", ""),
+                period=str((p.get("period") or {}).get("number", "")),
+                clock=(p.get("clock") or {}).get("displayValue", ""),
                 team=(p.get("team") or {}).get("id", ""),
                 description=p.get("text", ""),
                 scoring=bool(p.get("scoringPlay")),
             ))
 
     return GameState(
-        game_id=str(event_id), league=league_label, status=status,
+        game_id=str(event_id), league=league, status=status,
         home=(home.get("team") or {}).get("displayName", ""),
         away=(away.get("team") or {}).get("displayName", ""),
         home_score=int(home.get("score") or 0),
@@ -323,6 +398,42 @@ def fixtures_for_series(series_class, date: str | None = None) -> list[dict]:
 def supported_leagues() -> list[str]:
     """Every league with a live game-state feed."""
     return sorted(set(ESPN_PATHS) | {"MLB", "NHL"})
+
+
+def game_detail(league: str, game_id: str, espn_slug: str | None = None) -> GameDetail:
+    """Comprehensive capture for one fixture — every section the feed offers.
+
+    Costs one request. Sections absent for the sport, or not yet populated at
+    this stage of the game, come back empty rather than missing.
+    """
+    path = espn_slug and f"soccer/{espn_slug}"
+    if not path:
+        pair = ESPN_PATHS.get(league)
+        if not pair:
+            raise ValueError(f"no ESPN path for {league}")
+        path = "/".join(pair)
+
+    data = _get(f"{ESPN_API}/{path}/summary?event={game_id}", throttle=True)
+    state = _state_from_summary(data, league, game_id)
+    info = data.get("gameInfo") or {}
+
+    return GameDetail(
+        state=state,
+        boxscore=data.get("boxscore") or {},
+        odds=data.get("odds") or [],
+        predictions=data.get("pickcenter") or [],
+        injuries=data.get("injuries") or [],
+        rosters=data.get("rosters") or [],
+        leaders=data.get("leaders") or [],
+        win_probability=data.get("winprobability") or [],
+        standings=data.get("standings") or {},
+        last_five=data.get("lastFiveGames") or [],
+        season_series=data.get("seasonseries") or [],
+        venue=info.get("venue") or {},
+        officials=info.get("officials") or [],
+        attendance=info.get("attendance"),
+        weather=info.get("weather") or {},
+    )
 
 
 def game_state(league: str, game_id: str, with_plays: bool = True,
