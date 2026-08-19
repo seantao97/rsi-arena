@@ -67,8 +67,22 @@ class Candle:
     open_interest: float
 
     @property
+    def two_sided(self) -> bool:
+        """Whether a real book existed in this period.
+
+        Once a market closes the book empties and quotes read bid 0.00 /
+        ask 1.00. That is the absence of a market, not a 50/50 one, and taking
+        a midpoint of it makes every contract appear to crash to 0.50 at
+        settlement.
+        """
+        bid, ask = self.yes_bid_close, self.yes_ask_close
+        if bid is None or ask is None:
+            return False
+        return not (bid <= 0.0 and ask >= 1.0)
+
+    @property
     def mid(self) -> float | None:
-        if self.yes_bid_close is None or self.yes_ask_close is None:
+        if not self.two_sided:
             return None
         return (self.yes_bid_close + self.yes_ask_close) / 2
 
@@ -195,12 +209,19 @@ class History:
         return usable[-1] if usable else None
 
     def price_path(self, ticker: str, start: datetime | None = None,
-                   end: datetime | None = None, interval: int = MINUTE) -> list[Candle]:
-        """Candles over a window, defaulting to the market's whole life."""
-        if start is None or end is None:
-            opened, closed, _ = self.market_window(ticker)
-            start = start or opened
-            end = end or min(closed, datetime.now(timezone.utc))
+                   end: datetime | None = None, interval: int = MINUTE,
+                   clip_to_close: bool = True) -> list[Candle]:
+        """Candles over a window, defaulting to the market's whole life.
+
+        ``clip_to_close`` drops periods after the market closed. They contain
+        an empty book rather than a market, and including them is how a study
+        ends up concluding that every contract reverts to 0.50 at settlement.
+        """
+        opened, closed, _ = self.market_window(ticker)
+        start = start or opened
+        end = end or min(closed, datetime.now(timezone.utc))
+        if clip_to_close and closed:
+            end = min(end, closed)
         return self.candles(ticker, start, end, interval)
 
     def closing_quote(self, ticker: str, interval: int = MINUTE) -> Candle | None:
@@ -213,7 +234,7 @@ class History:
         end = min(closed, datetime.now(timezone.utc))
         window = self.candles(ticker, max(opened, end - timedelta(hours=12)), end, interval)
         for candle in reversed(window):
-            if candle.yes_bid_close is not None and candle.yes_ask_close is not None:
+            if candle.two_sided:
                 return candle
         return window[-1] if window else None
 
