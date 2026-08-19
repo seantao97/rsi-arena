@@ -25,7 +25,7 @@ an agent may reference one but never define one.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -148,6 +148,9 @@ class Agent:
         llm: LLMClient | None = None,
         cache: Cache | None = None,
         raise_on_error: bool = False,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+        on_token: Callable[[str], None] | None = None,
+        label: str | None = None,
         **inputs: Any,
     ) -> AgentResult:
         """Execute the plan once.
@@ -164,7 +167,8 @@ class Agent:
             rate_limit=self.config.rate_limit(),
         )
         costs = CostTracker(max_usd=self.config.max_usd, max_calls=self.config.max_calls)
-        tracer = Tracer(agent=self.name, costs=costs)
+        display = label or self.name
+        tracer = Tracer(agent=display, costs=costs, on_event=on_event)
         state: dict[str, Any] = {"question": question or "", **inputs}
         tracer.root.set_input(state)
         ctx = StepContext(
@@ -174,6 +178,7 @@ class Agent:
             config=self.config.to_llm_config(),
             context=self.context,
             state=state,
+            on_token=on_token,
         )
 
         output: Any = None
@@ -194,7 +199,7 @@ class Agent:
                 await client.close()
 
         return AgentResult(
-            agent=self.name,
+            agent=display,
             run_id=trace.run_id,
             inputs=state_inputs(state, question),
             output=output,

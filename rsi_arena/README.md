@@ -123,6 +123,11 @@ ceiling, the run stops — refused, not queued, matching the arena runtime's Gov
 ```bash
 python tests/test_end_to_end.py     # the runtime, against a fake OpenRouter
 python tests/test_examples.py       # the sample agents, against a fake OpenRouter and SearchApi
+python tests/test_server.py         # the backend's SSE routes, blinding and voting
 ```
 
-Both use `httpx.MockTransport`, so they need no key and no network.
+All three use `httpx.MockTransport`, so they need no key and no network. `make test` runs the set.
+
+For a version you can click on rather than read the output of, `tests/fake_openrouter.py` is a
+local stand-in that speaks the real protocols over HTTP — see the web app section of the
+[root README](../README.md#try-it-with-no-keys-and-no-spend).

@@ -326,7 +326,7 @@ class LLMClient:
         self,
         api_key: str | None = None,
         *,
-        base_url: str = DEFAULT_BASE_URL,
+        base_url: str | None = None,
         config: LLMConfig | None = None,
         cache: Cache | None = None,
         rate_limit: RateLimit | RateLimiter | None = None,
@@ -337,7 +337,12 @@ class LLMClient:
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
-        self.base_url = base_url.rstrip("/")
+        # Overridable so the stack can be pointed at a gateway, a proxy, or the
+        # local fake in ``tests/fake_openrouter.py`` — which is how the web UI
+        # is demonstrable without a key.
+        self.base_url = (
+            base_url or os.environ.get("OPENROUTER_BASE_URL") or DEFAULT_BASE_URL
+        ).rstrip("/")
         self.config = config or LLMConfig()
         self.cache = cache if cache is not None else default_cache()
         self.retry = retry or RetryPolicy()
@@ -836,6 +841,16 @@ class LLMClient:
             if self._pricing is None:
                 self._pricing = await self._load_pricing()
         return self._pricing.get(model.split(":")[0])
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        """The public model catalogue — id, name, context length, pricing.
+
+        Needs no key, which is why the web UI can populate a model picker
+        before anyone has configured anything.
+        """
+        response = await self._http().get(f"{self.base_url}/models", timeout=30.0)
+        response.raise_for_status()
+        return response.json().get("data") or []
 
     async def _load_pricing(self) -> dict[str, Pricing]:
         """Fetch the public model list once, for the estimate fallback path."""

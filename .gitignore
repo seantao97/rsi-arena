@@ -349,3 +349,8 @@ next-env.d.ts
 *temp_output_dir/
 
 .claude/
+
+# RSI Arena: local battle/vote store
+arena.db
+arena.db-wal
+arena.db-shm

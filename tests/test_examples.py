@@ -31,7 +31,26 @@ def _reply(model: str, content: str) -> httpx.Response:
 
 
 def openrouter(request: httpx.Request) -> httpx.Response:
+    """Answer a chat completion, in SSE form when the request asked to stream."""
     body = json.loads(request.content)
+    response = _answer(body)
+    return _as_sse(response, body) if body.get("stream") else response
+
+
+def _as_sse(response: httpx.Response, body: dict) -> httpx.Response:
+    """Re-cut a finished response as deltas, the way OpenRouter sends them."""
+    payload = response.json()
+    content = payload["choices"][0]["message"].get("content") or ""
+    pieces = [content[i:i + 12] for i in range(0, len(content), 12)] or [""]
+    chunks = [{"id": payload["id"], "model": payload["model"],
+               "choices": [{"delta": {"content": piece}}]} for piece in pieces]
+    chunks.append({"id": payload["id"], "model": payload["model"], "usage": payload["usage"],
+                   "choices": [{"delta": {}, "finish_reason": "stop"}]})
+    text = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+    return httpx.Response(200, text=text, headers={"content-type": "text/event-stream"})
+
+
+def _answer(body: dict) -> httpx.Response:
     model = body["model"]
     fmt = body.get("response_format")
 

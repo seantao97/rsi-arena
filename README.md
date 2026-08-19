@@ -109,11 +109,13 @@ Python 3.10 or newer. Two dependencies, `httpx` and `pydantic`.
 git clone https://github.com/Helpigent/rsi-arena && cd rsi-arena
 
 python3 -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
-pip install -e .
+pip install -e .                       # the runtime
+pip install -e ".[server]"             # ...plus the backend, if you want the web app
 ```
 
 `pip install -r requirements.txt` works too if you would rather not install the package; then
-run everything from the repo root, which the example scripts already assume.
+run everything from the repo root, which the example scripts already assume. `make install`
+does both halves, Python and npm.
 
 ### 2. Check it works, before spending anything
 
@@ -122,8 +124,10 @@ Both test files run against a fake OpenRouter and a fake SearchApi built on
 yours rather than ours.
 
 ```bash
+make test                           # or run them individually:
 python tests/test_end_to_end.py     # the runtime
 python tests/test_examples.py       # the three sample agents
+python tests/test_server.py         # the backend, its SSE routes and blinding
 ```
 
 ```
@@ -155,6 +159,21 @@ export SEARCHAPI_API_KEY=...
 Only `OPENROUTER_API_KEY` is required. `--agent plugin` needs no search key — OpenRouter's `web`
 plugin does the retrieval — so it is the one to try if you only have the one key. A missing key
 fails immediately with the variable name in the message, rather than as a 401 twenty seconds in.
+
+Two things worth knowing before the first real call:
+
+- **Credits, not a trial.** OpenRouter bills per call against a prepaid balance. With no credits
+  every request returns 402, and 402 is not retried — no amount of waiting adds credits. $5 is
+  more than enough to work through everything here.
+- **The model has to support structured outputs.** Steps with a schema send
+  `provider.require_parameters`, so a model whose endpoints do not implement `json_schema`
+  routes nowhere and returns 503 rather than quietly ignoring the schema. Anything in the
+  suggested list in [`server/app.py`](server/app.py) works; check the *Providers* section of a
+  model's page on OpenRouter before picking something else.
+
+Everything is cached, so re-running the same question with the same model costs nothing the
+second time. That is usually what you want, and occasionally exactly what you do not — pass
+`--max-usd` a fresh value or set `cache=False` on the config when you need a genuinely new call.
 
 ### 4. The smoke test agent
 
@@ -293,13 +312,122 @@ and how to register a new API — which is one `APISpec` literal and no client c
 | `[429]` in the trace's `retries` | Normal. Backed off and retried; the `Retry-After` header pauses every in-flight call, not just the one that lost |
 | `ModuleNotFoundError: rsi_arena` | Run from the repo root, or `pip install -e .` |
 | A run costs more than expected | `--trace` breaks cost down per step; `result.trace.costs.summary()` breaks it down by kind and by name |
+| The UI says it cannot reach the backend | `python -m server` is not running, or it is on a different port than `NEXT_PUBLIC_API_BASE` |
+| The UI says a key is missing but you exported it | It reads the *backend's* environment. Export it in the shell that starts `python -m server`, then restart it |
+| A run is still cheap the second time | It is cached. Cached rows are labelled in the trace and priced at $0 |
+| The trace arrives all at once at the end | Something is buffering `text/event-stream`. The backend sets `X-Accel-Buffering: no`; a proxy in front may need configuring too |
+
+## The web app
+
+A local UI for running agents against live models and watching what they do. Next.js + Tailwind
++ shadcn on **:8050**, FastAPI on **:3600**.
+
+Two tabs. **Playground** runs one agent and shows its plan, its trace and its bill. **Battle**
+runs two agents on the same question, same model, same ceiling, side by side and blind, and asks
+you to vote — the arena from the top of this file, minus the ratings.
+
+### Install
+
+```bash
+pip install -e ".[server]"          # adds fastapi and uvicorn
+cd web && npm install && cd ..
+```
+
+### Try it with no keys and no spend
+
+There is a local stand-in for OpenRouter and SearchApi that speaks enough of both protocols to
+drive the whole stack — streaming, tool calls, structured outputs, usage and cost. Answers are
+canned and say so, so nothing here can be mistaken for a real run.
+
+```bash
+make fake      # terminal 1 — the stand-in, on :3601
+make demo      # terminal 2 — backend on :3600, wired to it
+make web       # terminal 3 — the UI on :8050
+```
+
+Open **http://localhost:8050**. Everything works: live traces, streaming answers, blind battles,
+voting, the ledger. The only thing that is not real is the model.
+
+### Run it against real API calls
+
+Same three commands, minus the fake, plus your keys:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+export SEARCHAPI_API_KEY=...        # optional; the `plugin` agent does not need it
+
+make backend                        # terminal 1 — :3600, real calls
+make web                            # terminal 2 — :8050
+```
+
+Then open **http://localhost:8050** and:
+
+1. Check the banner at the top of the page. It reads the backend's environment, so if it says a
+   key is missing, the key is missing *in the shell that started the backend* — exporting it
+   somewhere else does not count. Agents needing an absent key are greyed out in the picker.
+2. Pick a model. The dropdown is OpenRouter's live catalogue, with known-good ones first.
+3. **Set the budget.** It defaults to $1.00 and it is enforced, not advisory — the backend stops
+   a run that crosses it and returns the partial trace. This is the field that decides what a
+   careless question costs.
+4. Ask something, and watch the **Trace** tab rather than the answer. Which primitives fired, in
+   what order, how many times the loop went round, and what each step charged, is the entire
+   point of the thing.
+
+To confirm calls are genuinely going out rather than coming from the cache: the **Cost** tab
+shows `served from cache`, and cached rows are labelled in the trace and priced at $0.
+
+Without the UI, the same calls from a terminal:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+python examples/web_research.py "Did the ECB cut rates in July 2026?" --agent all --trace
+```
+
+### What it costs
+
+Per question, on a mid-tier model:
+
+| | |
+|---|---|
+| `fermi` | under $0.02 — two model calls, no search |
+| `plugin` | $0.02–$0.05 — one call plus OpenRouter's web plugin (Exa is ~$0.007/request) |
+| `pipeline` | $0.05–$0.30 — six-plus model calls and up to four searches at ~$0.004 each |
+| `freeform` | $0.03–$0.25 — fewer, larger calls; the model decides how much to search |
+
+A battle runs two of these, so budget accordingly. The ceiling is per agent, and both sides of a
+battle get the same one.
+
+### Ports and configuration
+
+| | | |
+|---|---|---|
+| `8050` | Web app | `cd web && npm run dev` |
+| `3600` | Backend | `python -m server` — `--port`, `--host`, `--reload` |
+| `3601` | Local fake | `python -m tests.fake_openrouter` — only for the no-key demo |
+
+| Variable | Does |
+|---|---|
+| `OPENROUTER_API_KEY` | Required for any real model call |
+| `SEARCHAPI_API_KEY` | Google search for the `pipeline` and `freeform` agents |
+| `OPENROUTER_BASE_URL` | Point the runtime at a gateway, proxy, or the local fake |
+| `SEARCHAPI_BASE_URL` | Same, for search |
+| `RSI_ARENA_DB` | Where battles and votes are stored. Default `./arena.db` |
+| `NEXT_PUBLIC_API_BASE` | Where the UI looks for the backend. Default `http://localhost:3600` |
+
+[`server/README.md`](server/README.md) documents the routes and the event stream;
+[`web/README.md`](web/README.md) covers the frontend.
 
 ## Status
 
-Early. The runtime in [`rsi_arena/`](rsi_arena/) runs, with sample agents and offline tests.
-The [topics](topics/) are specified and the Kalshi data layer for the sports and market topics
-is built. The arena — battles, votes, ratings, and the optimizer that rewrites losing harnesses
-— is described here and not yet implemented.
+Early, but runnable end to end. The runtime in [`rsi_arena/`](rsi_arena/) works, with sample
+agents and offline tests; the [backend](server/) and [web app](web/) run battles live and record
+votes. The [topics](topics/) are specified and the Kalshi data layer for the sports and market
+topics is built.
+
+What is described above and not built: **ratings** — votes are counted, not turned into Elo,
+because an Elo number over a handful of votes looks authoritative and means nothing — and the
+**optimizer**, the loop that reads losing traces and writes the next generation of harnesses.
+That loop is the whole idea, and it is the part that does not exist yet.
 
 ## License
 
