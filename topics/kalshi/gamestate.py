@@ -60,16 +60,39 @@ SOCCER_SLUGS = {
 
 @dataclass
 class Play:
-    """One discrete event: a pitch, a shot, a goal, a touchdown."""
+    """One discrete event: a pitch, a shot, a goal, a touchdown.
 
-    ts: str
+    ``ts`` is a real UTC timestamp wherever the feed provides one, which is what
+    makes a play joinable to a market candle. ``sub_events`` carries the level
+    below the play — every pitch of an at-bat, with velocity, movement and plate
+    location — kept as the feed returned it rather than flattened into a schema
+    that would differ per sport.
+    """
+
+    ts: str                        # ISO8601 UTC when available
     period: str                    # inning, quarter, half, period
     clock: str
     team: str
     description: str
     scoring: bool = False
     players: list[str] = field(default_factory=list)
+    home_score: int | None = None  # after this play
+    away_score: int | None = None
+    play_type: str = ""
+    coordinates: dict[str, Any] = field(default_factory=dict)
+    detail: dict[str, Any] = field(default_factory=dict)   # count, runners, matchup
+    sub_events: list[dict] = field(default_factory=list)   # pitches, shots
     raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def utc(self) -> datetime | None:
+        """Parsed timestamp, or None when the feed gave only a game clock."""
+        if not self.ts:
+            return None
+        try:
+            return datetime.fromisoformat(self.ts.replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
 
 @dataclass
@@ -250,14 +273,39 @@ def mlb_game_state(game_pk: str | int, with_plays: bool = True) -> GameState:
     if with_plays:
         for p in ld.get("plays", {}).get("allPlays", []):
             about, result = p.get("about", {}), p.get("result", {})
+            matchup = p.get("matchup") or {}
             plays.append(Play(
                 ts=about.get("endTime") or about.get("startTime") or "",
                 period=f"{about.get('halfInning','')} {about.get('inning','')}".strip(),
-                clock="", team=(p.get("matchup", {}).get("batter", {}) or {}).get("fullName", ""),
+                clock="", team=(matchup.get("batter") or {}).get("fullName", ""),
                 description=result.get("description", ""),
                 scoring=bool(about.get("isScoringPlay")),
-                players=[v.get("fullName", "") for k, v in (p.get("matchup") or {}).items()
+                players=[v.get("fullName", "") for v in matchup.values()
                          if isinstance(v, dict) and v.get("fullName")],
+                home_score=result.get("homeScore"), away_score=result.get("awayScore"),
+                play_type=result.get("eventType", ""),
+                detail={
+                    "count": p.get("count") or {},
+                    "runners": [
+                        {"movement": r.get("movement") or {},
+                         "details": r.get("details") or {}}
+                        for r in (p.get("runners") or [])
+                    ],
+                    "rbi": result.get("rbi"), "is_out": result.get("isOut"),
+                    "bat_side": (matchup.get("batSide") or {}).get("code"),
+                    "pitch_hand": (matchup.get("pitchHand") or {}).get("code"),
+                },
+                # every pitch: velocity, break, plate location, timing, contact
+                sub_events=[{
+                    "index": e.get("index"), "is_pitch": e.get("isPitch"),
+                    "pitch_number": e.get("pitchNumber"),
+                    "start_time": e.get("startTime"), "end_time": e.get("endTime"),
+                    "call": ((e.get("details") or {}).get("call") or {}).get("description"),
+                    "pitch_type": ((e.get("details") or {}).get("type") or {}).get("description"),
+                    "count": e.get("count") or {},
+                    "pitch": e.get("pitchData") or {},
+                    "hit": e.get("hitData") or {},
+                } for e in (p.get("playEvents") or [])],
             ))
 
     return GameState(
@@ -358,8 +406,17 @@ def _state_from_summary(data: dict, league: str, event_id: str,
                 period=str((p.get("period") or {}).get("number", "")),
                 clock=(p.get("clock") or {}).get("displayValue", ""),
                 team=(p.get("team") or {}).get("id", ""),
-                description=p.get("text", ""),
+                description=p.get("text") or p.get("shortText", ""),
                 scoring=bool(p.get("scoringPlay")),
+                players=[(a.get("athlete") or {}).get("displayName", "")
+                         for a in (p.get("participants") or [])],
+                home_score=p.get("homeScore"), away_score=p.get("awayScore"),
+                play_type=((p.get("type") or {}).get("text")
+                           or (p.get("type") or {}).get("id") or ""),
+                coordinates=p.get("coordinate") or p.get("coordinates") or {},
+                detail={k: p[k] for k in
+                        ("start", "end", "statYardage", "scoreValue", "shootout")
+                        if k in p},
             ))
 
     return GameState(

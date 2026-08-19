@@ -9,6 +9,7 @@ collector that records the answers at high frequency.
 | *What is this market worth right now?* | [`quotes.py`](quotes.py) — live quotes and order books |
 | *What was it worth at 14:03, or over its whole life?* | [`history.py`](history.py) — candlesticks from the API, open or settled markets |
 | *What is actually happening in the game?* | [`gamestate.py`](gamestate.py) — scores, situation and play-by-play |
+| *What did the price do when it happened?* | [`timeline.py`](timeline.py) — game events and market candles on one UTC clock |
 | *Which game is this market about?* | [`linking.py`](linking.py) — parses fixtures out of event tickers and matches them to the game feed |
 | *Is anything priced inconsistently?* | [`coherence.py`](coherence.py) — no-arb checks across related markets, net of fees |
 | *Is there edge left after costs?* | [`fees.py`](fees.py) — fee schedule, breakeven, Kelly, CLV |
@@ -112,7 +113,7 @@ All free and keyless as of 2026-08-17.
 
 | League | Source | Depth |
 |---|---|---|
-| MLB | `statsapi.mlb.com` (official) | Pitch-level play-by-play, count, runners, current pitcher and batter |
+| MLB | `statsapi.mlb.com` (official) | **Every pitch** — velocity, break, plate location, zone, timing, contact — plus count, runners, score after each play. 291 pitches captured on one game. |
 | NHL | `api-web.nhle.com` (official) | Play-by-play, shifts |
 | 73 leagues | ESPN public endpoints | Scores, plays, boxscore, odds, rosters, injuries, venue |
 
@@ -165,6 +166,34 @@ is esports, Olympics, chess and four soccer leagues ESPN does not carry
 ESPN is undocumented. It has been stable for years but treat a schema change as
 expected rather than exceptional — every adapter normalises to the same
 `GameState`, so a break is contained to one function.
+
+## Timeline — the join
+
+Plays and candles on one UTC axis, so market moves can be attributed to events.
+
+```python
+tl = Timeline()
+entries = tl.build("MLB", game_id, [ticker])
+tl.reactions(entries, ticker)        # what the market did around each scoring play
+tl.leading_moves(entries, ticker)    # moves with no play behind them
+tl.coverage(state)                   # how much of a feed can be joined at all
+```
+
+Real output from one game — the Yankees contract, on Orioles fixtures:
+
+| Play | Before | After | Move |
+|---|---|---|---|
+| Grisham homers | 0.465 | 0.585 | **+0.120** |
+| Mayo homers *(Orioles)* | 0.515 | 0.495 | **−0.020** |
+| Grisham 2-RBI single | 0.535 | 0.815 | **+0.280** |
+
+Only plays with a real timestamp are joinable. Feeds that give a game clock and
+no wallclock are reported as unjoinable by `coverage()` rather than guessed at.
+
+**Post-close candles are not a market.** Once a contract closes the book empties
+and quotes read bid 0.00 / ask 1.00; taking a midpoint of that makes every
+contract appear to crash to 0.50 at settlement. `Candle.two_sided` is False
+there, `mid` is None, and `price_path` clips to the close by default.
 
 ## Coherence and costs
 
