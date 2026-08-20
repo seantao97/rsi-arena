@@ -192,4 +192,77 @@ def freeform_agent(config: AgentConfig | None = None,
     )
 
 
-AGENTS = {"pipeline": pipeline_agent, "freeform": freeform_agent}
+def inplay_agent(config: AgentConfig | None = None,
+                 tools: Toolbox | None = None) -> Agent:
+    """For a game already under way.
+
+    Pre-game forecasting is mostly research; in-play forecasting is mostly
+    reading the current state against what the market has already priced. So
+    the order is inverted — state first, then how this contract has moved on
+    earlier events, then whether the current price has absorbed what just
+    happened.
+    """
+    return Agent(
+        name="kalshi-sports-inplay",
+        description="Live game. State first, then the market's demonstrated sensitivity.",
+        context=CONTEXT + """
+
+You are pricing a game in progress. Two extra rules:
+- The market has already seen what you have seen. Your edge is in what it has not
+  yet absorbed, not in restating the score.
+- market_reaction tells you how much this exact contract moved on earlier events.
+  Use it to judge whether the current price has already priced the latest one,
+  rather than guessing the sensitivity.""",
+        tools=tools or kalshi_tools(),
+        config=config or default_config(),
+        plan=Plan(steps=[
+            ToolStep(name="rules", tool="market_rules",
+                     args={"ticker": "{{question}}"}, output_key="rules", fail_ok=True),
+            ToolStep(name="quote", tool="market_quote",
+                     args={"ticker": "{{question}}"}, output_key="quote", fail_ok=True),
+            PromptStep(
+                name="locate",
+                prompt=("Contract: {{question}}\nSettlement: {{rules}}\n\n"
+                        "Call find_game_for_market to get the game id, then game_state. "
+                        "Report the league code, the game id, and the live score and period "
+                        "in one line each."),
+                tools=["find_game_for_market", "game_state", "todays_fixtures"],
+                max_tool_iterations=4,
+                output_key="located",
+            ),
+            PromptStep(
+                name="read_game",
+                prompt=("Contract: {{question}}\nLocated: {{located}}\n\n"
+                        "Get the recent plays, and how this contract has reacted to earlier "
+                        "events. Check whether any price move had no play behind it — that "
+                        "means the market is ahead of the feed and the state you can see is "
+                        "stale."),
+                tools=["recent_plays", "market_reaction", "unexplained_moves", "game_state"],
+                max_tool_iterations=5,
+                output_key="live",
+            ),
+            PromptStep(
+                name="estimate",
+                prompt=("Contract: {{question}}\nSettlement: {{rules}}\nMarket: {{quote}}\n"
+                        "Live: {{live}}\n\n"
+                        "Give your probability that this settles YES from the current game "
+                        "state, then price the edge. Say explicitly whether the price has "
+                        "already absorbed the most recent event."),
+                tools=["price_the_edge", "market_quote"],
+                max_tool_iterations=3,
+                output_key="pricing",
+            ),
+            PromptStep(
+                name="write",
+                prompt=("Contract: {{question}}\nSettlement: {{rules}}\nMarket: {{quote}}\n"
+                        "Live: {{live}}\nPricing: {{pricing}}\n\n"
+                        "Write the call. PASS with a zero stake if the edge after fees is "
+                        "not positive."),
+                output_schema=PREDICTION_SCHEMA,
+                output_key="prediction",
+            ),
+        ]),
+    )
+
+
+AGENTS = {"pipeline": pipeline_agent, "freeform": freeform_agent, "inplay": inplay_agent}

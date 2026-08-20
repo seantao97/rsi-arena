@@ -21,21 +21,35 @@ operations differs — which is the comparison the arena exists to make.
 
 | | |
 |---|---|
-| **pipeline** | Fixed order: rules → orient → research loop → coherence → price → write. The plan decides what runs, and each step sees only the tools it needs. |
-| **freeform** | One prompt, every tool, a 14-call budget. The model decides what to call and when. |
+| **pipeline** | Pre-game. Fixed order: rules → orient → research loop → coherence → price → write. Each step sees only the tools it needs. |
+| **freeform** | Pre-game. One prompt, every tool, a 14-call budget. The model decides what to call and when. |
+| **inplay** | A game already under way. State first, then how this contract has moved on earlier events, then whether the price has absorbed the latest one. |
 
 Neither is the framework. They are generation zero — the thing an optimizer is
 meant to beat.
 
+## Continuous forecasting
+
+```bash
+python -m topics.kalshi.agents TICKER --watch --poll 30 --budget 5.00
+```
+
+`--watch` re-forecasts while a game runs, and **only when something material
+changed** — the score, the period, or the price by more than `--price-step`
+(3c default). Polling state is free; the model call is not, so a fixed interval
+would keep paying to re-answer a state that has not moved. One-cent noise is
+suppressed; a run scoring is not.
+
 ## The primitive set
 
-Sixteen tools, each a thin adapter over a function that already exists.
+Eighteen tools, each a thin adapter over a function that already exists.
 
 | Group | Tools |
 |---|---|
 | What can I bet on | `list_markets` `event_markets` `market_rules` |
 | What is it worth | `market_quote` `order_book` `price_history` `recent_trades` |
 | What is happening | `todays_fixtures` `game_state` `recent_plays` `game_context` `sportsbook_line` |
+| In-play | `market_reaction` `unexplained_moves` |
 | Structure and pricing | `coherence_check` `price_the_edge` `devig_odds` `find_game_for_market` |
 
 Three of them carry the opinions that make the output honest rather than
@@ -93,11 +107,18 @@ EPL, Liga MX and the Champions League, and publishes nothing for MLB, NFL or
 WNBA. `sportsbook_line` now says so explicitly rather than returning an error,
 because a coverage gap and a broken call should not look the same to an agent.
 
-**6. `timeline.py` is not exposed as a tool — open, and mine.** It joins plays
-to price moves on one clock and is the most useful thing in the package. It is
-absent because a tool returning an interleaved event stream needs a
-summarisation, and inventing one felt like the agent layer overreaching. That is
-a gap in this folder, not in the data layer.
+**6. `timeline.py` was not exposed as a tool — fixed.** The earlier reasoning
+was wrong: I claimed a timeline tool needed a summarisation I would have to
+invent, but `reactions()` *is* that summarisation and it already existed. The
+raw `build()` is 266 entries and ~3,300 tokens for one game, which is genuinely
+the wrong shape for a context window; `reactions()` is 3 items and ~175 tokens.
+`market_reaction` and `unexplained_moves` expose the summarised views. `build()`
+stays internal.
+
+`market_reaction` is what makes in-play forecasting more than restating the
+score: it measures how much *this exact contract* moved on earlier events, so
+the agent can judge whether the current price has already absorbed the latest
+one rather than guessing the sensitivity.
 
 ## Running without a model
 

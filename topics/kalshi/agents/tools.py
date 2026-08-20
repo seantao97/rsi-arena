@@ -35,12 +35,14 @@ from ..history import HOUR, MINUTE, History
 from ..implied import american_to_prob, devig
 from ..linking import link_event
 from ..quotes import Quotes
+from ..timeline import Timeline
 
 _client = KalshiClient()
 _discovery = Discovery(_client)
 _quotes = Quotes(_client)
 _history = History(_client)
 _coherence = Coherence(_client)
+_timeline = Timeline(_client)
 
 
 def _utc(hours_back: float) -> datetime:
@@ -189,6 +191,62 @@ async def sportsbook_line(league: str, game_id: str) -> dict:
                       "Soccer competitions carry them; the US leagues do not."}
 
 
+# --- how this market responds to events ------------------------------------
+
+@tool
+async def market_reaction(league: str, game_id: str, ticker: str) -> dict:
+    """How much this market has moved on each scoring play so far.
+
+    The market's sensitivity to events, measured on this exact contract rather
+    than assumed. If a home run moved it 12c earlier, the next one probably
+    moves it about as much — which is what tells you whether the current price
+    already reflects what just happened.
+
+    Only meaningful once a game is under way; a scheduled fixture has no plays.
+    """
+    def compute() -> dict:
+        state = gs.game_state(league, game_id, with_plays=True)
+        if state.status == "scheduled":
+            return {"available": False,
+                    "reason": "game has not started, so there are no plays to react to"}
+        entries = _timeline.build(league, game_id, [ticker], state=state)
+        moves = _timeline.reactions(entries, ticker)
+        return {
+            "available": True,
+            "status": state.status,
+            "score": f"{state.away} {state.away_score} - {state.home_score} {state.home}",
+            "reactions": [{"play": r.play.description[:120],
+                           "price_before": r.before, "price_after": r.after,
+                           "move": round(r.move, 4) if r.move is not None else None,
+                           "max_swing": round(r.swing, 4) if r.swing is not None else None}
+                          for r in moves],
+            "coverage": _timeline.coverage(state),
+        }
+    return await asyncio.to_thread(compute)
+
+
+@tool
+async def unexplained_moves(league: str, game_id: str, ticker: str,
+                            threshold: float = 0.05) -> dict:
+    """Price moves with no play behind them.
+
+    Either the market knows something the feed has not reported, or the feed
+    lags the market. Both matter: the first is information, the second means
+    game state is stale and should be weighted down.
+    """
+    def compute() -> dict:
+        state = gs.game_state(league, game_id, with_plays=True)
+        if state.status == "scheduled":
+            return {"available": False, "reason": "game has not started"}
+        entries = _timeline.build(league, game_id, [ticker], state=state)
+        found = _timeline.leading_moves(entries, ticker, threshold=threshold)
+        return {"available": True, "count": len(found),
+                "moves": [{"ts": m["ts"].isoformat(), "from": m["from"],
+                           "to": m["to"], "move": round(m["move"], 4)}
+                          for m in found[:8]]}
+    return await asyncio.to_thread(compute)
+
+
 # --- structure and pricing -------------------------------------------------
 
 @tool
@@ -257,5 +315,6 @@ def kalshi_tools() -> Toolbox:
         list_markets, event_markets, market_rules,
         market_quote, order_book, price_history, recent_trades,
         todays_fixtures, game_state, recent_plays, game_context, sportsbook_line,
+        market_reaction, unexplained_moves,
         coherence_check, price_the_edge, devig_odds, find_game_for_market,
     ])
