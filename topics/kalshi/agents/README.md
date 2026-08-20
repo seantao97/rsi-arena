@@ -79,7 +79,21 @@ lock-guarded, since threads can request it at once, and `RateLimiter.take` no
 longer sleeps while holding its lock, which would have serialised every caller
 behind whichever one ran out of tokens.
 
-**4. `timeline.py` is not exposed as a tool — open, and mine.** It joins plays
+**4. `todays_fixtures` and `game_detail` spoke different id spaces — fixed.**
+MLB and NHL use their official feeds, which are richer for score and plays, so
+`todays_fixtures` returns an MLB gamePk. ESPN is still the only source of odds,
+injuries and boxscore, and it answers 404 to a foreign id — gamePk `824474` is
+ESPN event `401816592`. `gamestate.resolve_espn_event` translates by date and
+team name, trying the day either side because the two feeds date a late fixture
+differently. Found by running the agent, which reported "no sportsbook lines
+available" while the tool was quietly 404ing. 9 of 9 MLB fixtures now resolve.
+
+**5. Sportsbook odds are soccer-only.** ESPN carries DraftKings and Bet365 for
+EPL, Liga MX and the Champions League, and publishes nothing for MLB, NFL or
+WNBA. `sportsbook_line` now says so explicitly rather than returning an error,
+because a coverage gap and a broken call should not look the same to an agent.
+
+**6. `timeline.py` is not exposed as a tool — open, and mine.** It joins plays
 to price moves on one clock and is the most useful thing in the package. It is
 absent because a tool returning an interleaved event stream needs a
 summarisation, and inventing one felt like the agent layer overreaching. That is

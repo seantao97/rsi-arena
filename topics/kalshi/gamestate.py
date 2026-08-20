@@ -29,7 +29,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .taxonomy import COMPETITIONS
@@ -457,6 +457,53 @@ def supported_leagues() -> list[str]:
     return sorted(set(ESPN_PATHS) | {"MLB", "NHL"})
 
 
+# Leagues whose ids come from an official feed rather than ESPN. Their ids are
+# not interchangeable — an MLB gamePk is 824474 where the ESPN event for the
+# same fixture is 401816587 — so anything reaching ESPN has to translate first.
+_OFFICIAL_ID_LEAGUES = {"MLB", "NHL"}
+
+
+def _norm(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def resolve_espn_event(league: str, game_id: str, date: str | None = None) -> str | None:
+    """Translate an official-feed game id into the ESPN event id for that fixture.
+
+    ``todays_games`` returns MLB gamePks and NHL game ids, because those feeds
+    are richer than ESPN's for score and play detail. ESPN is still the only
+    source of odds, injuries and boxscore, and it will not accept a foreign id —
+    it answers 404. This matches the two by date and team name.
+
+    Returns the id unchanged for leagues that already use ESPN's.
+    """
+    if league not in _OFFICIAL_ID_LEAGUES:
+        return game_id
+
+    state = game_state(league, game_id, with_plays=False)
+    home, away = _norm(state.home), _norm(state.away)
+    if not home or not away:
+        return None
+
+    # Try the requested day, then either side of it. The two feeds date a
+    # fixture by different local days, so a late game can sit on tomorrow's
+    # board and an early one on yesterday's.
+    base = (datetime.fromisoformat(date) if date
+            else datetime.now(timezone.utc)).date()
+    for offset in (0, 1, -1):
+        day = (base + timedelta(days=offset)).isoformat()
+        for event in espn_scoreboard(league, day):
+            comp = (event.get("competitions") or [{}])[0]
+            names = {c.get("homeAway"): _norm((c.get("team") or {}).get("displayName", ""))
+                     for c in comp.get("competitors", [])}
+            eh, ea = names.get("home", ""), names.get("away", "")
+            # Substring both ways: "Athletics" against "Oakland Athletics".
+            if ((eh and (eh in home or home in eh)) and
+                    (ea and (ea in away or away in ea))):
+                return str(event.get("id"))
+    return None
+
+
 def game_detail(league: str, game_id: str, espn_slug: str | None = None) -> GameDetail:
     """Comprehensive capture for one fixture — every section the feed offers.
 
@@ -470,8 +517,18 @@ def game_detail(league: str, game_id: str, espn_slug: str | None = None) -> Game
             raise ValueError(f"no ESPN path for {league}")
         path = "/".join(pair)
 
-    data = _get(f"{ESPN_API}/{path}/summary?event={game_id}", throttle=True)
-    state = _state_from_summary(data, league, game_id)
+    espn_id = resolve_espn_event(league, game_id) if not espn_slug else game_id
+    if espn_id is None:
+        state = game_state(league, game_id, with_plays=False)
+        raise ValueError(
+            f"ESPN has no event for {league} game {game_id} "
+            f"({state.away} @ {state.home}). Official-feed ids are not ESPN "
+            "ids, and no fixture matched by name on that day or either side of "
+            "it — ESPN sometimes omits makeup and resumed games entirely."
+        )
+
+    data = _get(f"{ESPN_API}/{path}/summary?event={espn_id}", throttle=True)
+    state = _state_from_summary(data, league, espn_id)
     info = data.get("gameInfo") or {}
 
     return GameDetail(

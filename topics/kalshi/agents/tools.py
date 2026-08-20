@@ -174,10 +174,19 @@ async def sportsbook_line(league: str, game_id: str) -> dict:
     The only outside reference available. A Kalshi price far from a de-vigged
     book line is either an edge or a misreading of the contract — check the
     rules before assuming the former.
+
+    Coverage is uneven and that is not a failure: ESPN publishes odds for
+    soccer competitions but not, as of August 2026, for MLB, NFL or WNBA. When
+    none is published, price off the market and the game state instead of
+    treating it as a broken call.
     """
     d = await asyncio.to_thread(gs.game_detail, league, game_id)
     fair = d.fair_probabilities()
-    return fair or {"error": "no sportsbook line published for this fixture"}
+    if fair:
+        return fair
+    return {"available": False,
+            "reason": f"ESPN publishes no sportsbook odds for {league}. "
+                      "Soccer competitions carry them; the US leagues do not."}
 
 
 # --- structure and pricing -------------------------------------------------
