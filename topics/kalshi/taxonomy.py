@@ -277,10 +277,19 @@ class SeriesClass:
 
     @property
     def is_fixture(self) -> bool:
-        """True when the series covers single fixtures rather than a season.
+        """A *hint* that the series covers single fixtures rather than a season.
 
-        Uses Kalshi's ``frequency`` where present, which is authoritative, and
-        falls back to the market type.
+        **Not authoritative, and must not be used as a filter on its own.**
+        Kalshi's ``frequency`` is the only signal available on a series object,
+        and ``custom`` is a catch-all: it covers per-game series and season
+        futures alike, so the World Series winner market reads as a fixture
+        here. It is right far more often than not, which is exactly what makes
+        it dangerous alone.
+
+        The definitive test needs an event ticker, since only a fixture encodes
+        a date and two team codes — see :func:`linking.is_fixture_event`, which
+        :meth:`discovery.Discovery.whats_bettable` applies for free on markets
+        it has already fetched.
         """
         if self.frequency:
             return self.frequency in FIXTURE_FREQUENCIES

@@ -158,6 +158,42 @@ def field_entrants(client: KalshiClient, event_ticker: str) -> list[str]:
     return parse_field_event(event_ticker, tickers).entrants
 
 
+def is_fixture_event(event_ticker: str) -> bool:
+    """Whether an event ticker encodes a real fixture.
+
+    The definitive test that ``SeriesClass.is_fixture`` cannot make: a fixture
+    carries a date and team codes (``26AUG171910AZBOS``), a season-long event
+    carries neither (``LEAST27``, ``27``). Needs no API call and no team-code
+    table, because the date prefix alone settles it.
+    """
+    return parse_event_ticker(event_ticker) is not None
+
+
+def link_event(client: KalshiClient, event_ticker: str, league: str,
+               games_by_date, min_confidence: float = 0.6,
+               series_ticker: str | None = None) -> Link | None:
+    """Resolve one event to its fixture in the game feed.
+
+    ``link_series`` walks every open event under a series to find one match,
+    which is wasteful when the caller already knows which event it wants. This
+    costs one market sweep for the team codes plus one day of fixtures.
+    """
+    series = series_ticker or event_ticker.split("-")[0]
+    codes = harvest_team_codes(client, series)
+    fixture = parse_event_ticker(event_ticker, series, codes)
+    if not fixture or not fixture.is_split:
+        return None
+    try:
+        games = games_by_date(league, fixture.date.isoformat())
+    except Exception:
+        return None
+    link = match_event_to_game(fixture, games, min_confidence)
+    if not link:
+        return None
+    return Link(link.event_ticker, league, link.game_id, link.home, link.away,
+                link.confidence, link.method)
+
+
 def split_team_blob(blob: str, codes: set[str]) -> tuple[str | None, str | None]:
     """Split ``AZBOS`` into ``("AZ", "BOS")`` using a set of known codes.
 

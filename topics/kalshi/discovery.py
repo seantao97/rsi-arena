@@ -12,11 +12,13 @@ Kalshi's hierarchy is series -> event -> market:
 
 from __future__ import annotations
 
+import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Iterable, Iterator
 
 from .client import KalshiClient
+from .linking import is_fixture_event
 from .taxonomy import MarketType, SeriesClass, Sport, classify_series
 
 
@@ -57,6 +59,10 @@ class Discovery:
     def __init__(self, client: KalshiClient | None = None) -> None:
         self.client = client or KalshiClient()
         self._series_cache: dict[str, SeriesClass] = {}
+        # Tools offload to threads, so the catalogue can be requested from
+        # several at once. Without this, concurrent first-calls each fetch all
+        # 13k series.
+        self._cache_lock = threading.Lock()
 
     # ---------- series ----------
 
@@ -64,6 +70,12 @@ class Discovery:
         """Every series on the exchange, classified. ~13k objects, cached."""
         if self._series_cache and not refresh:
             return self._series_cache
+        with self._cache_lock:
+            if self._series_cache and not refresh:
+                return self._series_cache
+            return self._load_series()
+
+    def _load_series(self) -> dict[str, SeriesClass]:
         out: dict[str, SeriesClass] = {}
         for s in self.client.paginate("/series", "series", page_size=200):
             ticker = s.get("ticker", "")
@@ -83,9 +95,10 @@ class Discovery:
     ) -> list[SeriesClass]:
         """Sports series, optionally filtered.
 
-        ``fixtures_only`` uses Kalshi's own ``frequency`` field and is the
-        accurate filter for "tied to a single fixture". ``game_level_only``
-        is the older market-type heuristic, kept for callers that want it.
+        ``fixtures_only`` filters on Kalshi's ``frequency`` hint. That hint is
+        not decisive on its own — see :attr:`SeriesClass.is_fixture` — so
+        :meth:`whats_bettable` re-checks each market's event ticker, which is
+        definitive and free.
         """
         results = [c for c in self.all_series().values() if c.sport is not Sport.OTHER
                    or c.league not in ("NONSPORT",)]
@@ -197,6 +210,11 @@ class Discovery:
         out: list[MarketRef] = []
         for s in wanted:
             for ref in self.markets(series_ticker=s, status="open"):
+                # The definitive fixture test, on a market already fetched.
+                # frequency == "custom" covers season futures too, so without
+                # this the World Series winner market passes fixtures_only.
+                if fixtures_only and not is_fixture_event(ref.event_ticker):
+                    continue
                 if ref.liquidity < min_liquidity:
                     continue
                 if closing_within_hours is not None and ref.close_time:

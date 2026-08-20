@@ -51,32 +51,39 @@ plausible:
 `PASS` is a valid position and the schema requires a stake of zero when the edge
 after fees is not positive.
 
-## Findings — what the infrastructure is missing
+## Findings from building this
 
-Building this exercised the data layer end to end. Four things surfaced.
+Three defects in the data layer surfaced and are fixed. One gap is mine and
+remains open.
 
-**1. `SeriesClass.is_fixture` is not trustworthy.** It reads Kalshi's
-`frequency`, but `custom` is a catch-all covering season futures as well as
-single games — the World Series winner market is `custom`, so it passes
-`fixtures_only=True`. The reliable test is whether `parse_event_ticker` returns
-a fixture, since only a game encodes a date and two team codes. The CLI works
-around it; the taxonomy should be fixed.
+**1. `is_fixture` let season futures through — fixed.** It reads Kalshi's
+`frequency`, and `custom` is a catch-all covering futures as well as games, so
+the World Series winner market passed `fixtures_only=True`. Its docstring now
+says it is a hint rather than a filter, and `whats_bettable` re-checks each
+market with `linking.is_fixture_event`, which is definitive and costs nothing
+because the market is already in hand. Zero futures now leak.
 
-**2. Nothing resolves a market to its fixture in one call.** `find_game_for_market`
-has to resolve the series, harvest team codes, then link the whole series just
-to find one event. It works, but it is the most expensive tool in the set by a
-wide margin, and a `link_event(event_ticker)` on `linking` would make it one
-call.
+**2. Resolving a market to its fixture took a whole series sweep — fixed.**
+`linking.link_event` resolves one event directly.
 
-**3. The data layer is synchronous.** Every tool blocks the event loop, so the
-agent cannot overlap a slow ESPN call with a Kalshi one. Fine for a single run,
-wrong for a slate.
+**3. Sync tools silently defeated the runtime's concurrency — fixed here, not
+there.** The runtime runs a sync tool inline on the event loop while
+`Toolbox.call_many` gathers calls expecting them to overlap, so four Kalshi
+calls that looked concurrent ran one after another with the loop blocked. Every
+tool in this file is now async and offloads with `asyncio.to_thread`, which
+measures at **≈2× on four concurrent calls** and keeps the loop responsive. The
+runtime is untouched.
 
-**4. No historical fixture state.** `todays_fixtures` takes a date, but there is
-no way to ask "what did the market and the game look like at 19:42" in one step
-— `timeline.py` does exactly this and is not exposed as a tool, because a tool
-returning an interleaved event stream needs a summarisation the agent layer
-should not be inventing.
+Two smaller things fell out of that: `Discovery`'s catalogue cache is now
+lock-guarded, since threads can request it at once, and `RateLimiter.take` no
+longer sleeps while holding its lock, which would have serialised every caller
+behind whichever one ran out of tokens.
+
+**4. `timeline.py` is not exposed as a tool — open, and mine.** It joins plays
+to price moves on one clock and is the most useful thing in the package. It is
+absent because a tool returning an interleaved event stream needs a
+summarisation, and inventing one felt like the agent layer overreaching. That is
+a gap in this folder, not in the data layer.
 
 ## Running without a model
 

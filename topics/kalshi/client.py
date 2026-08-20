@@ -49,8 +49,14 @@ class RateLimiter:
         self._lock = threading.Lock()
 
     def take(self, cost: int = 1) -> None:
-        with self._lock:
-            while True:
+        """Block until ``cost`` tokens are available.
+
+        The wait happens outside the lock. Sleeping while holding it would
+        serialise every caller behind the one that ran out of tokens, which
+        matters now that tools are offloaded to threads and genuinely contend.
+        """
+        while True:
+            with self._lock:
                 now = time.monotonic()
                 self._tokens = min(
                     self.capacity, self._tokens + (now - self._last) * self.rate
@@ -59,7 +65,8 @@ class RateLimiter:
                 if self._tokens >= cost:
                     self._tokens -= cost
                     return
-                time.sleep((cost - self._tokens) / self.rate)
+                wait = (cost - self._tokens) / self.rate
+            time.sleep(wait)
 
 
 @dataclass

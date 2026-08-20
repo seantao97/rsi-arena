@@ -8,10 +8,19 @@ paper over here.
 
 Human-supplied and fixed, per the arena's rule: an agent composes these, it does
 not extend them.
+
+**Every tool is async and offloads to a thread.** The Kalshi data layer is
+synchronous, and the runtime runs a sync tool inline on the event loop — so a
+sync tool silently defeats ``Toolbox.call_many``, which gathers calls expecting
+them to overlap. Four Kalshi calls that look concurrent would run one after
+another with the loop blocked throughout. ``asyncio.to_thread`` restores the
+concurrency the runtime is promising, without the data layer having to be
+rewritten around an async HTTP client.
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -24,7 +33,7 @@ from ..discovery import Discovery
 from ..fees import breakeven, edge, kelly, taker_fee
 from ..history import HOUR, MINUTE, History
 from ..implied import american_to_prob, devig
-from ..linking import harvest_team_codes, link_series, parse_event_ticker
+from ..linking import link_event
 from ..quotes import Quotes
 
 _client = KalshiClient()
@@ -41,14 +50,16 @@ def _utc(hours_back: float) -> datetime:
 # --- what can I bet on -----------------------------------------------------
 
 @tool
-def list_markets(league: str, limit: int = 25) -> list[dict]:
+async def list_markets(league: str, limit: int = 25) -> list[dict]:
     """List open Kalshi markets for a league, newest first.
 
     league: a league code such as MLB, NFL, NBA, EPL, LIGAMX.
     Returns ticker, title, market type, current bid and ask, volume.
     """
+    found = await asyncio.to_thread(_discovery.whats_bettable, league=league,
+                                    fixtures_only=True)
     out = []
-    for m in _discovery.whats_bettable(league=league, fixtures_only=True):
+    for m in found:
         out.append({"ticker": m.ticker, "event": m.event_ticker, "title": m.title,
                     "subtitle": m.subtitle, "type": m.market_type,
                     "yes_bid": m.yes_bid, "yes_ask": m.yes_ask,
@@ -59,95 +70,96 @@ def list_markets(league: str, limit: int = 25) -> list[dict]:
 
 
 @tool
-def event_markets(event_ticker: str) -> list[dict]:
+async def event_markets(event_ticker: str) -> list[dict]:
     """Every market on one fixture — both sides, every spread and total line."""
     return [{"ticker": m.ticker, "subtitle": m.subtitle, "type": m.market_type,
              "yes_bid": m.yes_bid, "yes_ask": m.yes_ask, "volume": m.volume}
-            for m in _discovery.markets(event_ticker=event_ticker)]
+            for m in await asyncio.to_thread(
+                lambda: list(_discovery.markets(event_ticker=event_ticker)))]
 
 
 @tool
-def market_rules(ticker: str) -> dict:
+async def market_rules(ticker: str) -> dict:
     """The settlement terms for a market — what actually decides it, and when.
 
     Read this before forming a view. Most avoidable losses come from answering a
     slightly different question than the one that settles.
     """
-    return _history.rules(ticker)
+    return await asyncio.to_thread(_history.rules, ticker)
 
 
 # --- what is it worth ------------------------------------------------------
 
 @tool
-def market_quote(ticker: str) -> dict:
+async def market_quote(ticker: str) -> dict:
     """Current bid, ask, last price, volume and open interest for one market."""
-    q = _quotes.get_market(ticker)
+    q = await asyncio.to_thread(_quotes.get_market, ticker)
     return {"ticker": q.ticker, "yes_bid": q.yes_bid, "yes_ask": q.yes_ask,
             "mid": q.mid, "spread": q.spread, "last": q.last,
             "volume": q.volume, "open_interest": q.open_interest, "status": q.status}
 
 
 @tool
-def order_book(ticker: str, depth: int = 5) -> dict:
+async def order_book(ticker: str, depth: int = 5) -> dict:
     """Resting depth on both sides. Tells you what size is actually available."""
-    b = _quotes.get_orderbook(ticker, depth)
+    b = await asyncio.to_thread(_quotes.get_orderbook, ticker, depth)
     return {"ticker": b.ticker, "yes": b.yes[:depth], "no": b.no[:depth]}
 
 
 @tool
-def price_history(ticker: str, hours_back: float = 24.0, hourly: bool = True) -> list[dict]:
+async def price_history(ticker: str, hours_back: float = 24.0, hourly: bool = True) -> list[dict]:
     """How the price has moved. Use it to see whether a level is new or settled.
 
     hourly: hourly candles when True, minute candles when False.
     """
     interval = HOUR if hourly else MINUTE
-    candles = _history.price_path(ticker, _utc(hours_back),
-                                  datetime.now(timezone.utc), interval)
+    candles = await asyncio.to_thread(_history.price_path, ticker, _utc(hours_back),
+                                      datetime.now(timezone.utc), interval)
     return [{"ts": c.ts.isoformat(), "mid": c.mid, "last": c.last,
              "volume": c.volume, "open_interest": c.open_interest} for c in candles]
 
 
 @tool
-def recent_trades(ticker: str, limit: int = 30) -> list[dict]:
+async def recent_trades(ticker: str, limit: int = 30) -> list[dict]:
     """The print tape — what actually traded, at what price, and who took liquidity."""
     return [{"ts": t.get("created_time"), "yes_price": t.get("yes_price_dollars"),
              "count": t.get("count_fp"), "taker_side": t.get("taker_side")}
-            for t in _history.trades(ticker, max_trades=limit)]
+            for t in await asyncio.to_thread(_history.trades, ticker, None, None, limit)]
 
 
 # --- what is happening in the game -----------------------------------------
 
 @tool
-def todays_fixtures(league: str) -> list[dict]:
+async def todays_fixtures(league: str) -> list[dict]:
     """Today's fixtures for a league, with the game id the other game tools need."""
-    return gs.todays_games(league)
+    return await asyncio.to_thread(gs.todays_games, league)
 
 
 @tool
-def game_state(league: str, game_id: str) -> dict:
+async def game_state(league: str, game_id: str) -> dict:
     """Live score, period, clock and situation for a fixture."""
-    st = gs.game_state(league, game_id, with_plays=False)
+    st = await asyncio.to_thread(gs.game_state, league, game_id, False)
     return {"status": st.status, "home": st.home, "away": st.away,
             "home_score": st.home_score, "away_score": st.away_score,
             "period": st.period, "clock": st.clock, "detail": st.detail}
 
 
 @tool
-def recent_plays(league: str, game_id: str, limit: int = 12) -> list[dict]:
+async def recent_plays(league: str, game_id: str, limit: int = 12) -> list[dict]:
     """The last plays in a game, most recent last. Scoring plays are flagged."""
-    st = gs.game_state(league, game_id, with_plays=True)
+    st = await asyncio.to_thread(gs.game_state, league, game_id, True)
     return [{"ts": p.ts, "period": p.period, "clock": p.clock,
              "description": p.description, "scoring": p.scoring,
              "score": f"{p.away_score}-{p.home_score}"} for p in st.plays[-limit:]]
 
 
 @tool
-def game_context(league: str, game_id: str) -> dict:
+async def game_context(league: str, game_id: str) -> dict:
     """Everything around a fixture: venue, injuries, form, head-to-head, leaders.
 
     One request. Sections a sport does not have come back empty.
     """
-    d = gs.game_detail(league, game_id)
+    d = await asyncio.to_thread(gs.game_detail, league, game_id)
     return {"venue": d.venue.get("fullName"), "attendance": d.attendance,
             "weather": d.weather, "officials": d.officials,
             "injuries": d.injuries[:2], "leaders": d.leaders[:2],
@@ -156,14 +168,14 @@ def game_context(league: str, game_id: str) -> dict:
 
 
 @tool
-def sportsbook_line(league: str, game_id: str) -> dict:
+async def sportsbook_line(league: str, game_id: str) -> dict:
     """The sportsbook's price on this fixture, with the bookmaker's margin removed.
 
     The only outside reference available. A Kalshi price far from a de-vigged
     book line is either an edge or a misreading of the contract — check the
     rules before assuming the former.
     """
-    d = gs.game_detail(league, game_id)
+    d = await asyncio.to_thread(gs.game_detail, league, game_id)
     fair = d.fair_probabilities()
     return fair or {"error": "no sportsbook line published for this fixture"}
 
@@ -171,7 +183,7 @@ def sportsbook_line(league: str, game_id: str) -> dict:
 # --- structure and pricing -------------------------------------------------
 
 @tool
-def coherence_check(event_ticker: str) -> list[dict]:
+async def coherence_check(event_ticker: str) -> list[dict]:
     """Look for inconsistent pricing across the markets on one fixture.
 
     A violation is money available without a forecast. Returns only findings
@@ -180,7 +192,7 @@ def coherence_check(event_ticker: str) -> list[dict]:
     return [{"kind": v.kind, "tickers": v.tickers, "detail": v.detail,
              "net_per_contract": round(v.net, 4), "size": v.size,
              "value_usd": round(v.value, 2)}
-            for v in _coherence.check_event(event_ticker)]
+            for v in await asyncio.to_thread(_coherence.check_event, event_ticker)]
 
 
 @tool
@@ -216,27 +228,18 @@ def devig_odds(american_odds: list[float]) -> dict:
 # --- joining a market to a game --------------------------------------------
 
 @tool
-def find_game_for_market(event_ticker: str, league: str) -> dict:
+async def find_game_for_market(event_ticker: str, league: str) -> dict:
     """Work out which real fixture a Kalshi event refers to.
 
     Returns the game id the game-state tools need.
     """
-    series = _discovery._series_for(event_ticker, _discovery.all_series())
-    if series is None:
-        return {"error": f"cannot resolve a series for {event_ticker}"}
-    series = series.ticker
-    codes = harvest_team_codes(_client, series)
-    fixture = parse_event_ticker(event_ticker, series, codes)
-    if not fixture:
-        return {"error": f"{event_ticker} does not encode a fixture"}
-    links = link_series(_client, series, league,
-                        lambda lg, d: gs.todays_games(lg, d))
-    for link in links:
-        if link.event_ticker == event_ticker:
-            return {"game_id": link.game_id, "home": link.home, "away": link.away,
-                    "confidence": link.confidence, "date": fixture.date.isoformat()}
-    return {"error": "no fixture matched", "date": fixture.date.isoformat(),
-            "teams": [fixture.away_code, fixture.home_code]}
+    link = await asyncio.to_thread(
+        link_event, _client, event_ticker, league,
+        lambda lg, day: gs.todays_games(lg, day))
+    if link:
+        return {"game_id": link.game_id, "home": link.home, "away": link.away,
+                "confidence": link.confidence}
+    return {"error": f"no fixture matched {event_ticker}"}
 
 
 def kalshi_tools() -> Toolbox:
