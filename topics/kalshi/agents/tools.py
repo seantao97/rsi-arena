@@ -150,9 +150,14 @@ async def game_state(league: str, game_id: str) -> dict:
 async def recent_plays(league: str, game_id: str, limit: int = 12) -> dict:
     """The last plays in a game, most recent last. Scoring plays are flagged.
 
-    Coverage is uneven: MLB gives every pitch, the major soccer leagues give
-    events, and some competitions publish none at all. When there are none, the
-    live score and clock come back instead so the caller still knows the state.
+    Coverage is uneven and narrower than it looks. Verified 2026-08-21 against
+    live and finished fixtures: MLB gives every pitch (official feed) and
+    basketball gives full play lists via ESPN, but **ESPN publishes no soccer
+    play-by-play at all** — an EPL match in progress returns zero plays, as does
+    the Saudi Pro League. Soccer in-play is therefore score-and-clock only.
+
+    When there are no plays the live score and clock come back instead, so the
+    caller still knows the state.
     """
     st = await asyncio.to_thread(gs.game_state, league, game_id, True)
     if not st.plays:
