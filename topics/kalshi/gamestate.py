@@ -32,7 +32,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .taxonomy import COMPETITIONS
+from .taxonomy import COMPETITIONS, resolve_league
 
 MLB_API = "https://statsapi.mlb.com/api/v1"
 NHL_API = "https://api-web.nhle.com/v1"
@@ -362,18 +362,26 @@ def espn_scoreboard(league: str, date: str | None = None,
     """Today's fixtures for a league, with ESPN event ids."""
     if espn_slug:
         sport, lg = "soccer", espn_slug
-    elif league in ESPN_PATHS:
-        sport, lg = ESPN_PATHS[league]
     else:
-        raise ValueError(f"no ESPN path for {league}; add one or pass espn_slug")
+        canonical = resolve_league(league)
+        if canonical not in ESPN_PATHS:
+            raise ValueError(
+                f"unknown league {league!r}. Valid codes include: "
+                + ", ".join(sorted(ESPN_PATHS)[:12]) + ", ..."
+            )
+        sport, lg = ESPN_PATHS[canonical]
     qs = f"?dates={date.replace('-', '')}" if date else ""
     return _get(f"{ESPN_API}/{sport}/{lg}/scoreboard{qs}", throttle=True).get("events", [])
 
 
 def espn_game_state(league: str, event_id: str, with_plays: bool = True) -> GameState:
-    if league not in ESPN_PATHS:
-        raise ValueError(f"no ESPN path for {league}; add one or pass espn_slug")
-    sport, lg = ESPN_PATHS[league]
+    canonical = resolve_league(league)
+    if canonical not in ESPN_PATHS:
+        raise ValueError(
+            f"unknown league {league!r}. Valid codes include: "
+            + ", ".join(sorted(ESPN_PATHS)[:12]) + ", ..."
+        )
+    sport, lg = ESPN_PATHS[canonical]
     return _espn_state_by_slug(sport, lg, event_id, with_plays, league)
 
 
@@ -558,6 +566,7 @@ def game_detail(league: str, game_id: str, espn_slug: str | None = None) -> Game
     Costs one request. Sections absent for the sport, or not yet populated at
     this stage of the game, come back empty rather than missing.
     """
+    league = resolve_league(league) or league
     path = espn_slug and f"soccer/{espn_slug}"
     if not path:
         pair = ESPN_PATHS.get(league)
@@ -608,6 +617,7 @@ def game_state(league: str, game_id: str, with_plays: bool = True,
     """
     if espn_slug:
         return _espn_state_by_slug("soccer", espn_slug, game_id, with_plays, league)
+    league = resolve_league(league) or league
     if league == "MLB":
         return mlb_game_state(game_id, with_plays)
     if league == "NHL":
@@ -618,6 +628,7 @@ def game_state(league: str, game_id: str, with_plays: bool = True,
 def todays_games(league: str, date: str | None = None,
                  espn_slug: str | None = None) -> list[dict]:
     """Fixtures for a league today, normalised to ``{id, home, away, start}``."""
+    league = resolve_league(league) or league
     if league == "MLB" and not espn_slug:
         return [{"id": str(g["gamePk"]),
                  "home": g["teams"]["home"]["team"]["name"],

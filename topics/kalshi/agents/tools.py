@@ -147,12 +147,25 @@ async def game_state(league: str, game_id: str) -> dict:
 
 
 @tool
-async def recent_plays(league: str, game_id: str, limit: int = 12) -> list[dict]:
-    """The last plays in a game, most recent last. Scoring plays are flagged."""
+async def recent_plays(league: str, game_id: str, limit: int = 12) -> dict:
+    """The last plays in a game, most recent last. Scoring plays are flagged.
+
+    Coverage is uneven: MLB gives every pitch, the major soccer leagues give
+    events, and some competitions publish none at all. When there are none, the
+    live score and clock come back instead so the caller still knows the state.
+    """
     st = await asyncio.to_thread(gs.game_state, league, game_id, True)
-    return [{"ts": p.ts, "period": p.period, "clock": p.clock,
-             "description": p.description, "scoring": p.scoring,
-             "score": f"{p.away_score}-{p.home_score}"} for p in st.plays[-limit:]]
+    if not st.plays:
+        return {"available": False,
+                "reason": f"no play-by-play published for {league}",
+                "status": st.status,
+                "score": f"{st.away} {st.away_score} - {st.home_score} {st.home}",
+                "period": st.period, "clock": st.clock}
+    return {"available": True,
+            "plays": [{"ts": p.ts, "period": p.period, "clock": p.clock,
+                       "description": p.description, "scoring": p.scoring,
+                       "score": f"{p.away_score}-{p.home_score}"}
+                      for p in st.plays[-limit:]]}
 
 
 @tool
@@ -256,6 +269,20 @@ async def market_reaction(league: str, game_id: str, ticker: str) -> dict:
         if state.status == "scheduled":
             return {"available": False,
                     "reason": "game has not started, so there are no plays to react to"}
+        cover = _timeline.coverage(state)
+        if not cover["timestamped"]:
+            # Some competitions carry no play-by-play at all — ESPN publishes
+            # none for the Saudi Pro League even on finished games. That is a
+            # coverage fact, not a failure, so return the state that IS known
+            # rather than raising and leaving the caller blind.
+            return {"available": False,
+                    "reason": f"{league} has no timestamped play-by-play, so no "
+                              "event can be aligned to a price move",
+                    "status": state.status,
+                    "score": f"{state.away} {state.away_score} - "
+                             f"{state.home_score} {state.home}",
+                    "period": state.period, "clock": state.clock,
+                    "coverage": cover}
         entries = _timeline.build(league, game_id, [ticker], state=state)
         moves = _timeline.reactions(entries, ticker)
         return {
@@ -285,6 +312,9 @@ async def unexplained_moves(league: str, game_id: str, ticker: str,
         state = gs.game_state(league, game_id, with_plays=True)
         if state.status == "scheduled":
             return {"available": False, "reason": "game has not started"}
+        if not _timeline.coverage(state)["timestamped"]:
+            return {"available": False,
+                    "reason": f"{league} has no timestamped play-by-play"}
         entries = _timeline.build(league, game_id, [ticker], state=state)
         found = _timeline.leading_moves(entries, ticker, threshold=threshold)
         return {"available": True, "count": len(found),
@@ -351,8 +381,9 @@ async def find_game_for_market(event_ticker: str, league: str) -> dict:
         link_event, _client, event_ticker, league,
         lambda lg, day: gs.todays_games(lg, day))
     if link:
-        return {"game_id": link.game_id, "home": link.home, "away": link.away,
-                "confidence": link.confidence}
+        return {"game_id": link.game_id, "league": league, "home": link.home,
+                "away": link.away, "confidence": link.confidence,
+                "note": "pass this exact league code to the game tools"}
     return {"error": f"no fixture matched {event_ticker}"}
 
 
