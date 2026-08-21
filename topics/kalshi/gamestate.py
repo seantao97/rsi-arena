@@ -452,6 +452,54 @@ def fixtures_for_series(series_class, date: str | None = None) -> list[dict]:
     return todays_games(series_class.league, date, espn_slug=slug)
 
 
+def live_games(leagues: list[str] | None = None,
+               window_days: int = 1) -> list[tuple[str, str, GameState]]:
+    """Every fixture currently in progress, across leagues.
+
+    **Do not use ``todays_games`` for this.** Feeds date a fixture by their own
+    local day, not UTC: MLB games with ``officialDate`` of the 20th start at
+    00:05Z on the 21st, so between roughly 00:00Z and 06:00Z a UTC-keyed lookup
+    returns the next day's unstarted slate and reports nothing live — during
+    exactly the hours most US sport is played. This spans the day either side.
+
+    Returns ``(league, game_id, state)`` for anything in progress.
+    """
+    import itertools
+
+    today = datetime.now(timezone.utc).date()
+    days = [(today + timedelta(days=d)).isoformat()
+            for d in range(-window_days, window_days + 1)]
+    wanted = leagues or supported_leagues()
+
+    out: list[tuple[str, str, GameState]] = []
+    seen: set[tuple[str, str]] = set()
+    for league, day in itertools.product(wanted, days):
+        try:
+            fixtures = todays_games(league, day)
+        except Exception:
+            continue
+        for fixture in fixtures:
+            key = (league, str(fixture["id"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                state = game_state(league, fixture["id"], with_plays=False)
+            except Exception:
+                continue
+            if state.status == "in_progress":
+                out.append((league, str(fixture["id"]), state))
+    return out
+
+
+def is_live(league: str, game_id: str) -> bool:
+    """Whether one fixture is in progress right now."""
+    try:
+        return game_state(league, game_id, with_plays=False).status == "in_progress"
+    except Exception:
+        return False
+
+
 def supported_leagues() -> list[str]:
     """Every league with a live game-state feed."""
     return sorted(set(ESPN_PATHS) | {"MLB", "NHL"})

@@ -191,6 +191,53 @@ async def sportsbook_line(league: str, game_id: str) -> dict:
                       "Soccer competitions carry them; the US leagues do not."}
 
 
+@tool
+async def live_markets(league: str, limit: int = 20) -> dict:
+    """Kalshi markets on games that are in progress right now.
+
+    The starting point for in-play forecasting: it finds the fixtures currently
+    being played, then the contracts written on them. Returns an empty list
+    when nothing is live, which is a fact about the schedule rather than a
+    failure.
+    """
+    def compute() -> dict:
+        games = gs.live_games([league])
+        if not games:
+            return {"live_games": 0, "markets": [],
+                    "note": f"no {league} fixture is in progress right now"}
+
+        by_game = {}
+        for _lg, game_id, state in games:
+            by_game[game_id] = {"game_id": game_id, "score":
+                                f"{state.away} {state.away_score} - "
+                                f"{state.home_score} {state.home}",
+                                "period": state.period, "clock": state.clock,
+                                "markets": []}
+
+        # Walk the league's fixture markets and keep those whose event links to
+        # a live game. link_event is one call per event, so the sweep is bounded
+        # by the number of distinct live events rather than the whole league.
+        seen_events: dict[str, str | None] = {}
+        for m in _discovery.whats_bettable(league=league, fixtures_only=True):
+            if len(by_game) and all(len(g["markets"]) >= limit for g in by_game.values()):
+                break
+            event = m.event_ticker
+            if event not in seen_events:
+                link = link_event(_client, event, league,
+                                  lambda lg, day: gs.todays_games(lg, day))
+                seen_events[event] = link.game_id if link else None
+            gid = seen_events[event]
+            if gid in by_game and len(by_game[gid]["markets"]) < limit:
+                by_game[gid]["markets"].append(
+                    {"ticker": m.ticker, "subtitle": m.subtitle,
+                     "type": m.market_type, "yes_bid": m.yes_bid,
+                     "yes_ask": m.yes_ask, "volume": m.volume})
+
+        return {"live_games": len(games),
+                "markets": [g for g in by_game.values() if g["markets"]]}
+    return await asyncio.to_thread(compute)
+
+
 # --- how this market responds to events ------------------------------------
 
 @tool
@@ -314,7 +361,7 @@ def kalshi_tools() -> Toolbox:
     return Toolbox([
         list_markets, event_markets, market_rules,
         market_quote, order_book, price_history, recent_trades,
-        todays_fixtures, game_state, recent_plays, game_context, sportsbook_line,
-        market_reaction, unexplained_moves,
+        todays_fixtures, live_markets, game_state, recent_plays, game_context,
+        sportsbook_line, market_reaction, unexplained_moves,
         coherence_check, price_the_edge, devig_odds, find_game_for_market,
     ])
