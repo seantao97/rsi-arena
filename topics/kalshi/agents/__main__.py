@@ -92,6 +92,16 @@ def state_fingerprint(league: str, game_id: str, ticker: str,
     return (st.status, st.period, st.home_score, st.away_score, bucket)
 
 
+def emit(*parts: object) -> None:
+    """Print and flush.
+
+    ``--watch`` runs for hours and is usually redirected to a file, where
+    Python buffers stdout by default — so a loop that is working looks
+    identical to one that has hung. Every line here flushes.
+    """
+    print(*parts, flush=True)
+
+
 async def watch(ticker: str, league: str, agent_name: str, config,
                 tools, poll_s: float, price_step: float, budget: float) -> int:
     """Re-forecast a live contract whenever the game or the price moves."""
@@ -100,10 +110,10 @@ async def watch(ticker: str, league: str, agent_name: str, config,
     event = ticker.rsplit("-", 1)[0]
     located = await find_game_for_market(event_ticker=event, league=league)
     if not located.ok or "game_id" not in (located.output or {}):
-        print(f"could not link {event} to a fixture: {located.output}", file=sys.stderr)
+        emit(f"could not link {event} to a fixture: {located.output}", file=sys.stderr)
         return 1
     game_id = located.output["game_id"]
-    print(f"watching {located.output['away']} @ {located.output['home']} "
+    emit(f"watching {located.output['away']} @ {located.output['home']} "
           f"(game {game_id}), polling every {poll_s:.0f}s\n")
 
     agent = AGENTS[agent_name](config, tools)
@@ -113,33 +123,33 @@ async def watch(ticker: str, league: str, agent_name: str, config,
             now = await asyncio.to_thread(state_fingerprint, league, game_id,
                                           ticker, price_step)
         except Exception as exc:
-            print(f"  poll failed: {exc}")
+            emit(f"  poll failed: {exc}")
             await asyncio.sleep(poll_s)
             continue
 
         if now[0] == "final" and last is not None:
-            print("game final — stopping")
+            emit("game final — stopping")
             return 0
         if now == last:
             await asyncio.sleep(poll_s)
             continue
 
         if spent >= budget:
-            print(f"budget of ${budget:.2f} reached — stopping")
+            emit(f"budget of ${budget:.2f} reached — stopping")
             return 0
 
         result = await agent.run(ticker)
         spent += result.cost_usd
         p = result.output if isinstance(result.output, dict) else {}
-        print(f"[{now[1]} {now[3]}-{now[2]}] {p.get('position','?'):4} "
+        emit(f"[{now[1]} {now[3]}-{now[2]}] {p.get('position','?'):4} "
               f"p={p.get('probability')} px={p.get('market_price')} "
               f"edge={p.get('edge_after_fees')}  (${result.cost_usd:.3f}, "
               f"${spent:.2f} total)")
         if p.get("reasoning"):
-            print(f"    {p['reasoning'][:150]}")
+            emit(f"    {p['reasoning'][:150]}")
         last = now
         if now[0] == "final":
-            print("game final — stopping")
+            emit("game final — stopping")
             return 0
         await asyncio.sleep(poll_s)
 
