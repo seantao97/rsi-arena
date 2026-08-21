@@ -179,6 +179,37 @@ def _build_registry() -> dict[str, tuple[Sport, str]]:
 COMPETITIONS: dict[str, tuple[Sport, str]] = _build_registry()
 
 
+def resolve_league(value: str) -> str | None:
+    """Map anything league-shaped onto a canonical league code.
+
+    Callers guess, and reasonably: a Kalshi ticker reads ``KXSAUDIPLGAME``, so
+    ``SAUDIPL`` is the obvious code to try — but the canonical one is ``SAUDI``.
+    Rejecting that is a usability bug, not a correct validation, so this accepts
+    the ticker stem, the ESPN slug and ordinary case variants.
+    """
+    if not value:
+        return None
+    probe = value.strip().upper().replace("-", "").replace("_", "")
+    if probe in COMPETITIONS:
+        return probe
+
+    # A Kalshi series stem, e.g. SAUDIPL -> SAUDI, LIGAPORTUGAL -> PRIMEIRA.
+    for stem, (league, _slug) in SOCCER_STEMS.items():
+        if probe.startswith(stem) or stem.startswith(probe):
+            return league
+
+    # An ESPN slug, e.g. "eng.1" or "soccer/eng.1".
+    tail = value.strip().lower().split("/")[-1]
+    for league, (_sport, path) in COMPETITIONS.items():
+        if path.split("/")[-1] == tail:
+            return league
+
+    for league in COMPETITIONS:
+        if probe.startswith(league) or league.startswith(probe):
+            return league
+    return None
+
+
 def espn_path(league: str) -> str | None:
     """ESPN ``sport/league`` path for a league code, or None if unwired."""
     hit = COMPETITIONS.get(league)
