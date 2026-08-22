@@ -191,6 +191,16 @@ class HorizonReport:
         return "\n".join(lines)
 
 
+SETTLE_MARGIN_S = 90
+"""How long past the target to wait before scoring.
+
+Kalshi's minute candle for a given minute is not queryable the instant that
+minute ends. Scoring a window the moment it comes due therefore reads the
+*previous* candle and marks the prediction against a price from before the
+horizon closed — which flatters any forecast that said FLAT.
+"""
+
+
 def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
          history: History | None = None) -> HorizonReport:
     """Read horizon forecasts and look up what the price actually did."""
@@ -218,7 +228,7 @@ def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
             continue
 
         due = datetime.fromisoformat(target)
-        if due > now:
+        if (now - due).total_seconds() < SETTLE_MARGIN_S:
             report.unresolved += 1
             continue
 

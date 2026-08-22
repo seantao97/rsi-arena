@@ -16,6 +16,14 @@ interval, and :func:`decide` turns that into an action against the live book and
 the fee schedule. Nothing is left to the model that arithmetic can settle, which
 removes an entire class of defect seen live — a position that contradicted the
 edge the same output reported.
+
+There is exactly **one model call per forecast**. The quote, the price path and
+the tape come from tool steps, which make no model call, and the caller passes
+the game state in — the supervisor already resolved the fixture, so paying a
+tool-calling loop to rediscover it every two minutes bought nothing. Measured
+live, that took a forecast from $0.13 across three calls to $0.018 across one,
+which is the difference between a few dozen scored windows a night and a few
+hundred.
 """
 
 from __future__ import annotations
@@ -26,7 +34,7 @@ from datetime import datetime, timedelta, timezone
 from rsi_arena import Agent, AgentConfig, Plan, PromptStep, Toolbox, ToolStep
 
 from ..fees import taker_fee
-from .tools import kalshi_tools
+from .tools import market_quote, price_history, recent_trades
 
 HORIZON_MINUTES = 5
 
@@ -117,6 +125,17 @@ def decide(predicted_mid: float, bid: float | None, ask: float | None,
                     f"{action} at {entry:.2f}, edge {edge:+.4f} after fees")
 
 
+def horizon_tools() -> Toolbox:
+    """Just the three tools the plan calls.
+
+    Worth about 70 tokens a forecast against the full nineteen-tool box —
+    the saving is not the point. An agent that cannot reach a tool cannot
+    surprise you by reaching for it, which matters once a model is rewriting
+    this harness.
+    """
+    return Toolbox([market_quote, price_history, recent_trades])
+
+
 def horizon_agent(config: AgentConfig | None = None,
                   tools: Toolbox | None = None,
                   minutes: int = HORIZON_MINUTES) -> Agent:
@@ -125,35 +144,38 @@ def horizon_agent(config: AgentConfig | None = None,
         name=f"kalshi-horizon-{minutes}m",
         description=f"Predicts this contract's mid price {minutes} minutes ahead.",
         context=CONTEXT,
-        tools=tools or kalshi_tools(),
+        tools=tools or horizon_tools(),
         config=config or AgentConfig(default_model="anthropic/claude-sonnet-4.5",
                                      max_usd=0.20),
         plan=Plan(steps=[
+            # Tool steps make no model call, so the quote, the path and the
+            # tape are fetched rather than asked for. The game state is passed
+            # in by the caller — the supervisor already resolved the fixture,
+            # and paying a tool-calling loop to rediscover it every two minutes
+            # bought nothing.
             ToolStep(name="quote", tool="market_quote",
-                     args={"ticker": "{{question}}"}, output_key="quote", fail_ok=True),
+                     args={"ticker": "{{question}}"}, output_key="quote",
+                     fail_ok=True),
             ToolStep(name="path", tool="price_history",
-                     args={"ticker": "{{question}}", "hours_back": 1.5, "hourly": False},
+                     args={"ticker": "{{question}}", "hours_back": 0.75,
+                           "hourly": False},
                      output_key="path", fail_ok=True),
-            PromptStep(
-                name="read",
-                prompt=(f"Contract: {{{{question}}}}\n\nNow: {{{{quote}}}}\n\n"
-                        "Recent minute bars:\n{{path}}\n\n"
-                        "Get the live game state, and the recent tape. Report in three "
-                        "lines: the score and clock, whether the price has been moving "
-                        "or flat, and whether anything just happened that the price may "
-                        "not have finished absorbing."),
-                tools=["find_game_for_market", "game_state", "recent_trades",
-                       "recent_plays", "order_book"],
-                max_tool_iterations=4,
-                output_key="state",
-            ),
+            ToolStep(name="tape", tool="recent_trades",
+                     args={"ticker": "{{question}}", "limit": 12},
+                     output_key="tape", fail_ok=True),
             PromptStep(
                 name="predict",
-                prompt=(f"Contract: {{{{question}}}}\nNow: {{{{quote}}}}\n"
-                        "Recent bars: {{path}}\nState: {{state}}\n\n"
-                        f"Where will the mid price be in {minutes} minutes? Give the "
-                        "price, an interval, a direction and how confident you are. "
-                        "FLAT is the right answer on a quiet market."),
+                prompt=("Contract: {{question}}\n"
+                        "Book now: {{quote}}\n"
+                        "Game: {{game}}\n"
+                        "Minute bars, last 45m: {{path}}\n"
+                        "Recent prints: {{tape}}\n\n"
+                        f"Where will the mid price be in {minutes} minutes? Give "
+                        "the price, an interval, a direction and how confident you "
+                        "are. FLAT is the right answer on a quiet market, and "
+                        "predicting movement that does not come is how this loses "
+                        "money."),
+                tools=[],
                 output_schema=PREDICTION_SCHEMA,
                 output_key="prediction",
             ),

@@ -322,8 +322,13 @@ class Supervisor:
         from .horizon import HORIZON_MINUTES, decide, horizon_agent, target_time
         from ..quotes import Quotes
 
+        # The supervisor already knows the fixture, so the game state is passed
+        # in rather than rediscovered by a tool-calling loop on every tick.
+        from .tools import game_state
+        state = await game_state(league=pos.league, game_id=pos.game_id)
         agent = horizon_agent(self.config, self.tools)
-        run = await agent.run(pos.ticker)
+        run = await agent.run(pos.ticker, game=json.dumps(state.output)[:1200]
+                              if state.ok else "unavailable")
         pos.spent_usd += run.cost_usd
         pos.forecasts += 1
 
