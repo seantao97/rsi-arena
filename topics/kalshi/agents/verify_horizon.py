@@ -138,11 +138,16 @@ class HorizonReport:
         return [w for w in self.windows if w.moved]
 
     @property
+    def calls(self) -> list[Window]:
+        """Windows where the agent committed to a direction and the price did
+        move. Anything else has no directional call to be right or wrong about."""
+        return [w for w in self.moves if w.direction != "FLAT"]
+
+    @property
     def direction_accuracy(self) -> float:
-        calls = [w for w in self.moves if w.direction != "FLAT"]
-        if not calls:
+        if not self.calls:
             return 0.0
-        return sum(1 for w in calls if w.direction_right) / len(calls)
+        return sum(1 for w in self.calls if w.direction_right) / len(self.calls)
 
     @property
     def echoed(self) -> int:
@@ -193,9 +198,10 @@ class HorizonReport:
             f"  price error       {self.mae:.4f}   (no-change {self.naive_mae:.4f})",
             f"  skill vs no-change {self.skill:+.1%}"
             + ("   — worse than saying nothing" if self.skill < 0 else ""),
-            f"  direction         {self.direction_accuracy:.1%} of "
-            f"{len([w for w in self.moves if w.direction != 'FLAT'])} calls "
-            f"on real moves ({len(self.moves)}/{self.n} windows moved)",
+            "  direction         " + (
+                f"{self.direction_accuracy:.1%} of {len(self.calls)} calls"
+                if self.calls else "no directional calls")
+            + f" ({len(self.moves)}/{self.n} windows moved)",
             f"  interval coverage {self.coverage:.1%}",
             f"  echoed the market  {self.echoed}/{self.n} windows predicted the "
             f"current mid exactly",
