@@ -196,8 +196,10 @@ class HorizonReport:
             f"{self.games} games",
             "",
             f"  price error       {self.mae:.4f}   (no-change {self.naive_mae:.4f})",
-            f"  skill vs no-change {self.skill:+.1%}"
-            + ("   — worse than saying nothing" if self.skill < 0 else ""),
+            f"  skill vs no-change {self.skill:+.1%}" + (
+                "   — worse than saying nothing" if self.skill < -0.01
+                else "   — indistinguishable from it" if self.skill < 0.01
+                else ""),
             "  direction         " + (
                 f"{self.direction_accuracy:.1%} of {len(self.calls)} calls"
                 if self.calls else "no directional calls")

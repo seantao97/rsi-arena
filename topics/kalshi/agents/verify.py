@@ -443,7 +443,10 @@ def main() -> int:
         else:
             print(h.summary())
         if args.plots:
-            for path in verify_horizon.plot(h):
+            # Alongside the feed, not in a fixed directory — two runs on
+            # different state dirs would otherwise overwrite each other's plots.
+            out_dir = Path(args.feed).expanduser().parent / "plots"
+            for path in verify_horizon.plot(h, out_dir):
                 print(f"  wrote {path}")
         return 0
 
