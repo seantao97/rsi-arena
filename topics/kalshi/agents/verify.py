@@ -421,7 +421,31 @@ def main() -> int:
     ap.add_argument("--bankroll", type=float, default=50_000.0)
     ap.add_argument("--min-edge", type=float, default=0.02)
     ap.add_argument("--kelly", type=float, default=0.25)
+    ap.add_argument("--mode", default="probability",
+                    choices=["probability", "horizon"],
+                    help="horizon scores 5-minute price predictions")
     args = ap.parse_args()
+
+    if args.mode == "horizon":
+        from . import verify_horizon
+        h = verify_horizon.load(args.feed)
+        if args.json:
+            print(json.dumps({"windows": h.n, "contracts": h.contracts,
+                              "mae": round(h.mae, 4),
+                              "naive_mae": round(h.naive_mae, 4),
+                              "skill": round(h.skill, 4),
+                              "direction_accuracy": round(h.direction_accuracy, 4),
+                              "coverage": round(h.coverage, 4),
+                              "trades": len(h.taken), "pnl": round(h.pnl, 2),
+                              "roi": round(h.roi, 4),
+                              "win_rate": round(h.win_rate, 4),
+                              "unresolved": h.unresolved}, indent=2))
+        else:
+            print(h.summary())
+        if args.plots:
+            for path in verify_horizon.plot(h):
+                print(f"  wrote {path}")
+        return 0
 
     report = load(args.feed)
     paper = paper_trade(report, args.bankroll, args.min_edge, args.kelly)

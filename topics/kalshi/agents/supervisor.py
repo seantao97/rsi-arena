@@ -16,8 +16,15 @@ What it guarantees while running:
 * **Spend is bounded across restarts**, not per process, because a crash loop
   that resets the budget is how a ceiling silently stops being one.
 
-    python -m topics.kalshi.agents.supervisor --contracts TICKER,TICKER --league MLB
-    python -m topics.kalshi.agents.supervisor --league MLB --auto --max-contracts 3
+    python -m topics.kalshi.agents.supervisor --league EPL --contracts TICKER
+    python -m topics.kalshi.agents.supervisor --league EPL --discover --mode horizon
+
+``--discover`` is the autonomous form: it rescans the league for live markets,
+takes on new ones, releases settled ones, and keeps going. Nothing needs a
+ticker chosen by hand.
+
+``--mode horizon`` predicts the price five minutes ahead and lets arithmetic
+decide the trade, rather than asking the model for a probability and a position.
 """
 
 from __future__ import annotations
@@ -53,6 +60,7 @@ class Position:
     settled: bool = False
     result: str | None = None
     last_fingerprint: tuple | None = None
+    last_record: dict | None = None
     last_error: str | None = None
 
 
@@ -62,9 +70,15 @@ class Supervisor:
     def __init__(self, league: str, agent: str = "inplay",
                  poll_s: float = 45.0, price_step: float = 0.03,
                  budget_usd: float = 10.0, per_run_usd: float = 0.30,
-                 state_dir: str = "~/.kalshi-agent") -> None:
+                 state_dir: str = "~/.kalshi-agent", mode: str = "inplay",
+                 discover: bool = False, max_contracts: int = 4,
+                 rescan_s: float = 300.0) -> None:
         self.league = league
         self.agent_name = agent
+        self.mode = mode
+        self.discover = discover
+        self.max_contracts = max_contracts
+        self.rescan_s = rescan_s
         self.poll_s = poll_s
         self.price_step = price_step
         self.budget_usd = budget_usd
@@ -93,12 +107,13 @@ class Supervisor:
             return
         for ticker, data in raw.get("positions", {}).items():
             data.pop("last_fingerprint", None)
+            data.pop("last_record", None)
             self.positions[ticker] = Position(**data)
 
     def _save(self) -> None:
         payload = {"updated": _now(),
                    "positions": {t: {k: v for k, v in asdict(p).items()
-                                     if k != "last_fingerprint"}
+                                     if k not in ("last_fingerprint", "last_record")}
                                  for t, p in self.positions.items()}}
         tmp = self.state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=2))
@@ -129,17 +144,73 @@ class Supervisor:
 
         self._log("start", contracts=len(self.positions), budget=self.budget_usd,
                   already_spent=round(self.spent, 4))
-        workers = [asyncio.create_task(self._own(t)) for t in self.positions]
-        heartbeat = asyncio.create_task(self._heartbeat())
+        self._workers = {t: asyncio.create_task(self._own(t)) for t in self.positions}
+        background = [asyncio.create_task(self._heartbeat())]
+        if self.discover:
+            background.append(asyncio.create_task(self._discovery_loop()))
         try:
-            await asyncio.gather(*workers)
+            while not self._stop.is_set():
+                if self._workers:
+                    await asyncio.wait(self._workers.values(),
+                                       return_when=asyncio.FIRST_COMPLETED)
+                    self._workers = {t: w for t, w in self._workers.items()
+                                     if not w.done()}
+                if not self._workers and not self.discover:
+                    break                      # fixed contract list, all settled
+                if not self._workers:
+                    await self._sleep(15)      # discovering: idle until one appears
         finally:
-            heartbeat.cancel()
+            for task in list(self._workers.values()) + background:
+                task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await heartbeat
+                await asyncio.gather(*self._workers.values(), *background,
+                                     return_exceptions=True)
             self._save()
             self._log("stop", spent=round(self.spent, 4),
                       settled=sum(1 for p in self.positions.values() if p.settled))
+
+    async def _discovery_loop(self) -> None:
+        """Take on new live markets, without being told which.
+
+        Runs alongside the workers: settled contracts free a slot, and the next
+        rescan fills it. That is what makes the service autonomous rather than a
+        list of tickers someone typed.
+        """
+        from .tools import live_markets
+
+        while not self._stop.is_set():
+            try:
+                active = sum(1 for p in self.positions.values() if not p.settled)
+                room = self.max_contracts - active
+                if room > 0:
+                    found = await live_markets(league=self.league, limit=30)
+                    added = 0
+                    for game in (found.output or {}).get("markets", []):
+                        ranked = sorted(game["markets"],
+                                        key=lambda m: -(m.get("volume") or 0))
+                        for market in ranked:
+                            ticker = market["ticker"]
+                            if added >= room:
+                                break
+                            if ticker in self.positions:
+                                continue
+                            # A market with no two-sided quote cannot be traded
+                            # or scored, so it is not worth a slot.
+                            if not market.get("yes_bid") or not market.get("yes_ask"):
+                                continue
+                            self.add(ticker)
+                            self._workers[ticker] = asyncio.create_task(
+                                self._own(ticker))
+                            self._log("discovered", ticker=ticker,
+                                      volume=market.get("volume"))
+                            added += 1
+                    if added:
+                        self._save()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._log("discovery_error", error=f"{type(exc).__name__}: {exc}")
+            await self._sleep(self.rescan_s)
 
     async def _heartbeat(self) -> None:
         """Prove liveness. A silent service and a hung one look identical."""
@@ -196,28 +267,88 @@ class Supervisor:
 
         fingerprint = await asyncio.to_thread(
             cli.state_fingerprint, pos.league, pos.game_id, pos.ticker, self.price_step)
-        if fingerprint == pos.last_fingerprint:
-            return                                  # nothing material changed; spend nothing
+        # In probability mode a forecast only earns its cost when something
+        # changed. In horizon mode the cadence *is* the product: each run opens
+        # a window that gets scored five minutes later, and skipping quiet
+        # stretches would drop exactly the windows where predicting FLAT is the
+        # skill being measured.
+        if self.mode != "horizon" and fingerprint == pos.last_fingerprint:
+            return
+
+        if self.mode == "horizon":
+            entry = await self._horizon_tick(pos, fingerprint)
+        else:
+            entry = await self._probability_tick(pos, fingerprint)
+        pos.last_fingerprint = fingerprint
+        self._record(entry)
+        self._log("forecast", **{k: v for k, v in entry.items()
+                                 if k in ("ticker", "score", "position", "action",
+                                          "probability", "predicted_mid",
+                                          "market_price", "edge", "cost_usd")})
+        self._save()
+
+    async def _probability_tick(self, pos: Position, fingerprint: tuple) -> dict:
+        """Ask for a probability, then check the arithmetic before recording."""
+        from .validation import validate
 
         agent = AGENTS[self.agent_name](self.config, self.tools)
         run = await agent.run(pos.ticker)
         pos.spent_usd += run.cost_usd
         pos.forecasts += 1
-        pos.last_fingerprint = fingerprint
 
-        out = run.output if isinstance(run.output, dict) else {}
-        entry = {"ts": _now(), "ticker": pos.ticker, "game_id": pos.game_id,
-                 "status": fingerprint[0], "period": fingerprint[1],
-                 "score": f"{fingerprint[3]}-{fingerprint[2]}",
+        out = dict(run.output) if isinstance(run.output, dict) else {}
+        entry = {"ts": _now(), "mode": "probability", "ticker": pos.ticker,
+                 "game_id": pos.game_id, "status": fingerprint[0],
+                 "period": fingerprint[1], "score": f"{fingerprint[3]}-{fingerprint[2]}",
                  "position": out.get("position"), "probability": out.get("probability"),
                  "market_price": out.get("market_price"),
-                 "edge_reported": out.get("edge_after_fees"),
+                 "edge_after_fees": out.get("edge_after_fees"),
+                 "stake_usd": out.get("stake_usd"),
                  "cost_usd": round(run.cost_usd, 4), "error": run.error}
-        self._record(entry)
-        self._log("forecast", **{k: v for k, v in entry.items()
-                                 if k in ("ticker", "score", "position",
-                                          "probability", "market_price", "cost_usd")})
-        self._save()
+
+        check = validate(entry, pos.last_record)
+        entry = check.corrected
+        entry["valid"] = check.ok
+        if check.errors or check.warnings:
+            entry["validation"] = check.errors + check.warnings
+            self._log("validation", ticker=pos.ticker, ok=check.ok,
+                      issues=check.errors + check.warnings)
+        pos.last_record = {k: entry.get(k) for k in
+                           ("probability", "score", "period")}
+        return entry
+
+    async def _horizon_tick(self, pos: Position, fingerprint: tuple) -> dict:
+        """Predict the price five minutes out; let arithmetic decide the trade."""
+        from .horizon import HORIZON_MINUTES, decide, horizon_agent, target_time
+        from ..quotes import Quotes
+
+        agent = horizon_agent(self.config, self.tools)
+        run = await agent.run(pos.ticker)
+        pos.spent_usd += run.cost_usd
+        pos.forecasts += 1
+
+        out = run.output if isinstance(run.output, dict) else {}
+        quote = await asyncio.to_thread(Quotes().get_market, pos.ticker)
+        predicted = out.get("predicted_mid")
+        decision = (decide(predicted, quote.yes_bid, quote.yes_ask,
+                           out.get("confidence") or 0.5)
+                    if isinstance(predicted, (int, float))
+                    else None)
+
+        return {"ts": _now(), "mode": "horizon", "ticker": pos.ticker,
+                "game_id": pos.game_id, "status": fingerprint[0],
+                "period": fingerprint[1], "score": f"{fingerprint[3]}-{fingerprint[2]}",
+                "horizon_minutes": HORIZON_MINUTES,
+                "target_ts": target_time(HORIZON_MINUTES),
+                "mid_now": quote.mid, "bid": quote.yes_bid, "ask": quote.yes_ask,
+                "predicted_mid": predicted, "interval": out.get("interval"),
+                "direction": out.get("direction"), "confidence": out.get("confidence"),
+                "driver": out.get("driver"),
+                "action": decision.action if decision else "PASS",
+                "edge": decision.edge if decision else 0.0,
+                "entry_price": decision.entry_price if decision else 0.0,
+                "stake_usd": decision.size_usd if decision else 0.0,
+                "cost_usd": round(run.cost_usd, 4), "error": run.error}
 
     async def _sleep(self, seconds: float) -> None:
         with contextlib.suppress(asyncio.TimeoutError):
@@ -242,8 +373,11 @@ async def main() -> int:
     ap = argparse.ArgumentParser(description="Run Kalshi forecasting agents as a service")
     ap.add_argument("--league", required=True)
     ap.add_argument("--contracts", default="", help="comma separated tickers")
-    ap.add_argument("--auto", action="store_true", help="pick live markets automatically")
-    ap.add_argument("--max-contracts", type=int, default=3)
+    ap.add_argument("--discover", action="store_true",
+                    help="find live markets continuously and keep going")
+    ap.add_argument("--mode", default="inplay", choices=["inplay", "horizon"])
+    ap.add_argument("--rescan", type=float, default=300.0)
+    ap.add_argument("--max-contracts", type=int, default=4)
     ap.add_argument("--agent", default="inplay", choices=list(AGENTS))
     ap.add_argument("--poll", type=float, default=45.0)
     ap.add_argument("--price-step", type=float, default=0.03)
@@ -253,15 +387,14 @@ async def main() -> int:
     args = ap.parse_args()
 
     sup = Supervisor(args.league, args.agent, args.poll, args.price_step,
-                     args.budget, args.per_run, args.state_dir)
+                     args.budget, args.per_run, args.state_dir,
+                     mode=args.mode, discover=args.discover,
+                     max_contracts=args.max_contracts, rescan_s=args.rescan)
 
-    tickers = [t.strip() for t in args.contracts.split(",") if t.strip()]
-    if args.auto and not tickers:
-        tickers = await _auto_contracts(args.league, args.max_contracts)
-    for ticker in tickers:
+    for ticker in [t.strip() for t in args.contracts.split(",") if t.strip()]:
         sup.add(ticker)
 
-    if not sup.positions:
+    if not sup.positions and not args.discover:
         print(json.dumps({"ts": _now(), "event": "nothing_to_watch",
                           "league": args.league}), flush=True)
         return 1
