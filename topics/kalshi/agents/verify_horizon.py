@@ -41,6 +41,7 @@ class Window:
     entry_price: float
     stake_usd: float
     interval: list | None = None
+    staleness_s: float = 0.0       # how far before the target the price is from
 
     @property
     def error(self) -> float:
@@ -112,6 +113,7 @@ class HorizonReport:
     windows: list[Window] = field(default_factory=list)
     unresolved: int = 0
     skipped: int = 0
+    stale: int = 0
 
     @property
     def n(self) -> int:
@@ -183,7 +185,7 @@ class HorizonReport:
     def summary(self) -> str:
         if not self.n:
             return (f"no scored windows ({self.unresolved} still open, "
-                    f"{self.skipped} unscoreable)")
+                    f"{self.skipped} unscoreable, {self.stale} stale)")
         lines = [
             f"HORIZON  {self.n} windows across {self.contracts} contracts, "
             f"{self.games} games",
@@ -212,6 +214,9 @@ class HorizonReport:
             lines.append(f"\n  {self.unresolved} windows not yet due")
         if self.skipped:
             lines.append(f"  {self.skipped} skipped — no two-sided quote at target")
+        if self.stale:
+            lines.append(f"  {self.stale} dropped — nearest candle more than "
+                         f"{MAX_STALENESS_S}s before the target")
         if self.contracts < 5:
             plural = "contract" if self.contracts == 1 else "contracts"
             lines.append(f"\n  only {self.contracts} independent {plural} — "
@@ -219,6 +224,18 @@ class HorizonReport:
                          "treat the pnl as an illustration, not a result")
         return "\n".join(lines)
 
+
+MAX_STALENESS_S = 180
+"""How far before the target a resolved price may sit and still count.
+
+Kalshi emits a candle only for minutes that saw activity, so on a thin market
+the target minute may have none and ``quote_at`` returns an older one — which
+would mark the prediction against a price from before the horizon opened. Seen
+on a real contract: 75 minutes of an EPL match produced 29 candles, not 75.
+
+Three minutes is generous for a five-minute horizon, and windows beyond it are
+dropped rather than scored, because a wrong label is worse than a missing one.
+"""
 
 SETTLE_MARGIN_S = 90
 """How long past the target to wait before scoring.
@@ -268,6 +285,11 @@ def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
             report.skipped += 1
             continue
 
+        staleness = (due - candle.ts.astimezone(due.tzinfo)).total_seconds()
+        if staleness > MAX_STALENESS_S:
+            report.stale += 1
+            continue
+
         report.windows.append(Window(
             ticker=row["ticker"], ts=row.get("ts", ""), target_ts=target,
             mid_now=float(mid_now), predicted=float(predicted),
@@ -278,6 +300,7 @@ def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
             entry_price=row.get("entry_price") or 0.0,
             stake_usd=row.get("stake_usd") or 0.0,
             interval=row.get("interval"),
+            staleness_s=staleness,
         ))
     return report
 
