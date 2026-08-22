@@ -35,7 +35,7 @@ class Window:
     mid_now: float
     predicted: float
     realised: float
-    direction: str
+    stated_direction: str          # what the model called it, for information
     confidence: float
     action: str
     entry_price: float
@@ -50,6 +50,29 @@ class Window:
     def naive_error(self) -> float:
         """What predicting no change would have cost."""
         return abs(self.mid_now - self.realised)
+
+    @property
+    def direction(self) -> str:
+        """Derived from the numbers, not from the model's own label.
+
+        Seen live: a forecast that put the price four cents above the current
+        mid and labelled itself FLAT. The number is the prediction; the label
+        is commentary, and scoring the commentary would score the wrong thing.
+        """
+        delta = self.predicted - self.mid_now
+        if abs(delta) < 0.01:
+            return "FLAT"
+        return "UP" if delta > 0 else "DOWN"
+
+    @property
+    def echoes_market(self) -> bool:
+        """Predicting exactly the current mid is the degenerate answer.
+
+        It scores zero skill by construction and costs a model call to produce.
+        Tracked because a base harness that mostly does this is the thing the
+        next harness has to beat.
+        """
+        return self.predicted == self.mid_now
 
     @property
     def moved(self) -> bool:
@@ -120,6 +143,10 @@ class HorizonReport:
         return sum(1 for w in calls if w.direction_right) / len(calls)
 
     @property
+    def echoed(self) -> int:
+        return sum(1 for w in self.windows if w.echoes_market)
+
+    @property
     def coverage(self) -> float:
         seen = [w for w in self.windows if w.covered is not None]
         return sum(1 for w in seen if w.covered) / len(seen) if seen else 0.0
@@ -168,6 +195,8 @@ class HorizonReport:
             f"{len([w for w in self.moves if w.direction != 'FLAT'])} calls "
             f"on real moves ({len(self.moves)}/{self.n} windows moved)",
             f"  interval coverage {self.coverage:.1%}",
+            f"  echoed the market  {self.echoed}/{self.n} windows predicted the "
+            f"current mid exactly",
         ]
         if self.taken:
             lines += [
@@ -243,7 +272,7 @@ def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
             ticker=row["ticker"], ts=row.get("ts", ""), target_ts=target,
             mid_now=float(mid_now), predicted=float(predicted),
             realised=float(candle.mid),
-            direction=row.get("direction") or "FLAT",
+            stated_direction=row.get("direction") or "FLAT",
             confidence=row.get("confidence") or 0.0,
             action=row.get("action") or "PASS",
             entry_price=row.get("entry_price") or 0.0,
