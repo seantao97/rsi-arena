@@ -62,7 +62,10 @@ PREDICTION_SCHEMA = {
         "predicted_mid": {"type": "number",
                           "description": "Mid price you expect in 5 minutes, 0-1."},
         "interval": {"type": "array", "items": {"type": "number"},
-                     "description": "Low and high bound on that price."},
+                     "description": ("Low and high bound — your own two-sided "
+                                     "quote. A trade is only taken when the "
+                                     "exchange's price sits outside this, so "
+                                     "widen it when you are unsure.")},
         "direction": {"type": "string", "enum": ["UP", "DOWN", "FLAT"]},
         "confidence": {"type": "number",
                        "description": "0-1. How sure, given how thin and noisy this book is."},
@@ -93,22 +96,41 @@ class Decision:
 
 def decide(predicted_mid: float, bid: float | None, ask: float | None,
            confidence: float = 0.5, bankroll: float = 50_000.0,
-           min_edge: float = 0.02, max_fraction: float = 0.02) -> Decision:
+           min_edge: float = 0.02, max_fraction: float = 0.02,
+           interval: list | tuple | None = None) -> Decision:
     """Turn a predicted price into an action against the live book.
 
-    Buying yes costs the ask and is worth the predicted mid; buying no costs
-    ``1 - bid`` and is worth ``1 - predicted``. Both pay a fee on entry. The
-    larger of the two, if it clears ``min_edge``, is the trade.
+    The prediction is a two-sided quote of the agent's own: ``interval`` is
+    where it thinks the price will be, and the trade is only justified when the
+    exchange's quote sits entirely outside it. So the edge is measured from the
+    **near edge of the interval**, not from its middle — buying yes at the ask
+    has to beat the low end of the predicted range, not just its centre.
 
-    Size scales with confidence and is capped, because this predicts a price
-    five minutes out and being right about direction says nothing about
-    magnitude.
+    That makes the interval load-bearing. A wide interval is the agent saying it
+    does not know, and it stops producing trades on its own, without a
+    confidence threshold bolted on top.
+
+    Falls back to the point prediction when no usable interval is given.
+
+    Size scales with confidence and is capped, because being right about
+    direction five minutes out says nothing about magnitude.
     """
     if bid is None or ask is None or not 0 < bid <= ask < 1:
         return Decision("PASS", 0.0, 0.0, 0.0, "no two-sided market")
 
-    yes_edge = predicted_mid - (ask + taker_fee(ask))
-    no_edge = (1 - predicted_mid) - ((1 - bid) + taker_fee(1 - bid))
+    low = high = predicted_mid
+    if isinstance(interval, (list, tuple)) and len(interval) == 2:
+        try:
+            low, high = sorted(float(x) for x in interval)
+        except (TypeError, ValueError):
+            low = high = predicted_mid
+        # An interval that excludes its own point estimate is incoherent; the
+        # point estimate is the thing the model was actually asked for.
+        if not low <= predicted_mid <= high:
+            low = high = predicted_mid
+
+    yes_edge = low - (ask + taker_fee(ask))
+    no_edge = (1 - high) - ((1 - bid) + taker_fee(1 - bid))
 
     if yes_edge >= no_edge and yes_edge > min_edge:
         action, edge, entry = "BUY_YES", yes_edge, ask
@@ -116,13 +138,16 @@ def decide(predicted_mid: float, bid: float | None, ask: float | None,
         action, edge, entry = "BUY_NO", no_edge, 1 - bid
     else:
         best = max(yes_edge, no_edge)
+        note = "" if low == high else f" (worst case of [{low:.2f}, {high:.2f}])"
         return Decision("PASS", round(best, 4), 0.0, 0.0,
-                        f"best edge {best:+.4f} does not clear {min_edge:.0%}")
+                        f"best edge {best:+.4f}{note} does not clear {min_edge:.0%}")
 
     fraction = max_fraction * max(0.0, min(1.0, confidence))
+    bound = "point" if low == high else f"[{low:.2f}, {high:.2f}]"
     return Decision(action, round(edge, 4), entry,
                     round(bankroll * fraction, 2),
-                    f"{action} at {entry:.2f}, edge {edge:+.4f} after fees")
+                    f"{action} at {entry:.2f}, edge {edge:+.4f} after fees "
+                    f"vs {bound}")
 
 
 def horizon_tools() -> Toolbox:

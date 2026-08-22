@@ -336,7 +336,8 @@ class Supervisor:
         quote = await asyncio.to_thread(Quotes().get_market, pos.ticker)
         predicted = out.get("predicted_mid")
         decision = (decide(predicted, quote.yes_bid, quote.yes_ask,
-                           out.get("confidence") or 0.5)
+                           out.get("confidence") or 0.5,
+                           interval=out.get("interval"))
                     if isinstance(predicted, (int, float))
                     else None)
 
