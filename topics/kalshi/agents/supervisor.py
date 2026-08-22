@@ -72,13 +72,14 @@ class Supervisor:
                  budget_usd: float = 10.0, per_run_usd: float = 0.30,
                  state_dir: str = "~/.kalshi-agent", mode: str = "inplay",
                  discover: bool = False, max_contracts: int = 4,
-                 rescan_s: float = 300.0) -> None:
+                 rescan_s: float = 300.0, max_failures: int = 6) -> None:
         self.league = league
         self.agent_name = agent
         self.mode = mode
         self.discover = discover
         self.max_contracts = max_contracts
         self.rescan_s = rescan_s
+        self.max_failures = max_failures
         self.poll_s = poll_s
         self.price_step = price_step
         self.budget_usd = budget_usd
@@ -240,12 +241,33 @@ class Supervisor:
                 self._log("error", ticker=ticker, error=pos.last_error,
                           failures=pos.failures, retry_in=backoff)
                 self._save()
+                if pos.failures >= self.max_failures:
+                    # Give the slot back. An unlinkable contract that retries
+                    # forever is indistinguishable from a working one to the
+                    # discovery loop, which then never refills.
+                    self._log("abandoned", ticker=ticker, failures=pos.failures,
+                              error=pos.last_error)
+                    pos.settled = True
+                    self._save()
+                    return
                 await self._sleep(backoff)
                 backoff = min(backoff * 2, 300.0)
 
     async def _tick(self, pos: Position) -> None:
         from . import __main__ as cli
         from ..history import History
+
+        # Settlement is checked before linking, and deliberately so. A settled
+        # market needs no fixture, and its game has usually rolled off the feed
+        # — linking first meant such a contract could never be released, so it
+        # retried forever and held a slot that discovery could not reuse.
+        result = await asyncio.to_thread(History().settlement, pos.ticker)
+        if result is not None:
+            pos.settled, pos.result = True, result
+            self._log("settled", ticker=pos.ticker, result=result,
+                      forecasts=pos.forecasts, spent=round(pos.spent_usd, 4))
+            self._save()
+            return
 
         if pos.game_id is None:
             event = pos.ticker.rsplit("-", 1)[0]
@@ -256,14 +278,6 @@ class Supervisor:
             if not pos.game_id:
                 raise RuntimeError(f"cannot link {event} to a fixture: {data}")
             self._log("linked", ticker=pos.ticker, game_id=pos.game_id)
-
-        result = await asyncio.to_thread(History().settlement, pos.ticker)
-        if result is not None:
-            pos.settled, pos.result = True, result
-            self._log("settled", ticker=pos.ticker, result=result,
-                      forecasts=pos.forecasts, spent=round(pos.spent_usd, 4))
-            self._save()
-            return
 
         fingerprint = await asyncio.to_thread(
             cli.state_fingerprint, pos.league, pos.game_id, pos.ticker, self.price_step)
