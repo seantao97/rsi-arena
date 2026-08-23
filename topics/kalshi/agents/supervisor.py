@@ -381,7 +381,8 @@ class Supervisor:
 
     async def _horizon_tick(self, pos: Position, fingerprint: tuple) -> dict:
         """Predict the price five minutes out; let arithmetic decide the trade."""
-        from .horizon import HORIZON_MINUTES, decide, horizon_agent, target_time
+        from .horizon import (HORIZON_MINUTES, decide, horizon_agent, quote_from,
+                              target_time)
         from .validation import validate_horizon
         from ..quotes import Quotes
 
@@ -397,12 +398,17 @@ class Supervisor:
 
         out = run.output if isinstance(run.output, dict) else {}
         quote = await asyncio.to_thread(Quotes().get_market, pos.ticker)
-        predicted = out.get("predicted_mid")
-        decision = (decide(predicted, quote.yes_bid, quote.yes_ask,
-                           out.get("confidence") or 0.5,
-                           interval=out.get("interval"))
-                    if isinstance(predicted, (int, float))
-                    else None)
+
+        # The anchor is the exchange's mid, never the model's reading of it.
+        delta = out.get("delta_cents")
+        width = out.get("half_width_cents")
+        predicted = interval = decision = None
+        if isinstance(delta, (int, float)) and quote.mid is not None:
+            predicted, low, high = quote_from(
+                quote.mid, delta, width if isinstance(width, (int, float)) else 3.0)
+            interval = [round(low, 4), round(high, 4)]
+            decision = decide(predicted, quote.yes_bid, quote.yes_ask,
+                              out.get("confidence") or 0.5, interval=interval)
 
         entry = {"ts": _now(), "mode": "horizon", "ticker": pos.ticker,
                 "game_id": pos.game_id, "status": fingerprint[0],
@@ -410,8 +416,9 @@ class Supervisor:
                 "horizon_minutes": HORIZON_MINUTES,
                 "target_ts": target_time(HORIZON_MINUTES),
                 "mid_now": quote.mid, "bid": quote.yes_bid, "ask": quote.yes_ask,
-                "predicted_mid": predicted, "interval": out.get("interval"),
-                "direction": out.get("direction"), "confidence": out.get("confidence"),
+                "predicted_mid": predicted, "interval": interval,
+                "delta_cents": delta, "half_width_cents": width,
+                "confidence": out.get("confidence"),
                 "driver": out.get("driver"),
                 "action": decision.action if decision else "PASS",
                 "edge": decision.edge if decision else 0.0,

@@ -21,8 +21,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from ..fees import taker_fee
-from ..history import History
+from ..fees import maker_fee, taker_fee
+from ..history import MINUTE, History
 
 
 @dataclass
@@ -41,7 +41,8 @@ class Window:
     entry_price: float
     stake_usd: float
     interval: list | None = None
-    staleness_s: float = 0.0       # how far before the target the price is from
+    staleness_s: float = 0.0
+    filled: bool = True            # resting orders only fill if price came to them       # how far before the target the price is from
 
     @property
     def error(self) -> float:
@@ -97,15 +98,31 @@ class Window:
         return lo <= self.realised <= hi
 
     @property
+    def resting(self) -> bool:
+        return self.action.startswith("MAKE")
+
+    @property
+    def long_yes(self) -> bool:
+        return self.action in ("BUY_YES", "MAKE_YES")
+
+    @property
     def pnl(self) -> float:
-        """Enter now at the quoted price, mark out at the realised mid."""
+        """Enter at the order's price, mark out at the realised mid.
+
+        A resting order that never filled has no position and no pnl. That is
+        not a rounding detail: quoting inside the spread looks free until you
+        notice a bid fills exactly when the market is coming down to meet it,
+        so counting unfilled quotes as wins would invert the result.
+        """
         if self.action == "PASS" or not self.entry_price or not self.stake_usd:
             return 0.0
+        if self.resting and not self.filled:
+            return 0.0
         contracts = self.stake_usd / self.entry_price
-        exit_value = (self.realised if self.action == "BUY_YES"
-                      else 1 - self.realised)
-        return contracts * (exit_value - self.entry_price
-                            - taker_fee(self.entry_price))
+        exit_value = self.realised if self.long_yes else 1 - self.realised
+        cost = (maker_fee(self.entry_price) if self.resting
+                else taker_fee(self.entry_price))
+        return contracts * (exit_value - self.entry_price - cost)
 
 
 @dataclass
@@ -160,7 +177,19 @@ class HorizonReport:
 
     @property
     def taken(self) -> list[Window]:
+        """Orders that resulted in a position. A resting quote that the market
+        never came to is an order, not a trade."""
+        return [w for w in self.windows
+                if w.action != "PASS" and (w.filled or not w.resting)]
+
+    @property
+    def quoted(self) -> list[Window]:
         return [w for w in self.windows if w.action != "PASS"]
+
+    @property
+    def fill_rate(self) -> float:
+        rest = [w for w in self.windows if w.resting]
+        return sum(1 for w in rest if w.filled) / len(rest) if rest else 0.0
 
     @property
     def pnl(self) -> float:
@@ -208,10 +237,14 @@ class HorizonReport:
             f"  echoed the market  {self.echoed}/{self.n} windows predicted the "
             f"current mid exactly",
         ]
-        if self.taken:
+        if self.quoted:
             lines += [
                 "",
-                f"  traded            {len(self.taken)} of {self.n} windows",
+                f"  quoted            {len(self.quoted)} of {self.n} windows"
+                + (f", {len([w for w in self.windows if w.resting])} resting "
+                   f"({self.fill_rate:.0%} filled)"
+                   if any(w.resting for w in self.windows) else ""),
+                f"  traded            {len(self.taken)}",
                 f"  pnl               ${self.pnl:+,.2f} on ${self.staked:,.0f} "
                 f"({self.roi:+.2%})",
                 f"  win rate          {self.win_rate:.1%}",
@@ -253,6 +286,33 @@ minute ends. Scoring a window the moment it comes due therefore reads the
 *previous* candle and marks the prediction against a price from before the
 horizon closed — which flatters any forecast that said FLAT.
 """
+
+
+def _filled(history: History, ticker: str, placed: datetime, due: datetime,
+            action: str, entry: float) -> bool:
+    """Did the market come to a resting order during the window?
+
+    A buy sitting at 0.29 fills when someone sells into it, which shows up as
+    the book trading down to 0.29 or below. The candlestick low over the window
+    answers that; nothing else here is honest, because a quote the market never
+    reached is not a position.
+
+    Optimistic in one respect and deliberately so: touching a price is treated
+    as filling there, when in reality a queue may not clear. That errs toward
+    counting fills, which errs against the agent — an unfilled quote can only
+    ever have been free.
+    """
+    candles = history.candles(ticker, placed, due, MINUTE)
+    if not candles:
+        return False
+    if action == "MAKE_YES":
+        lows = [c.yes_bid_low for c in candles if c.yes_bid_low is not None]
+        return bool(lows) and min(lows) <= entry + 1e-9
+    # A resting sell is quoted on the yes side at 1 - entry; it fills when the
+    # book trades up through that price.
+    target = 1 - entry
+    highs = [c.yes_ask_high for c in candles if c.yes_ask_high is not None]
+    return bool(highs) and max(highs) >= target - 1e-9
 
 
 def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
@@ -298,14 +358,21 @@ def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
             report.stale += 1
             continue
 
+        action = row.get("action") or "PASS"
+        entry = row.get("entry_price") or 0.0
+        filled = True
+        if action.startswith("MAKE") and entry:
+            filled = _filled(history, row["ticker"],
+                             datetime.fromisoformat(row["ts"]), due,
+                             action, entry)
+
         report.windows.append(Window(
             ticker=row["ticker"], ts=row.get("ts", ""), target_ts=target,
             mid_now=float(mid_now), predicted=float(predicted),
             realised=float(candle.mid),
             stated_direction=row.get("direction") or "FLAT",
             confidence=row.get("confidence") or 0.0,
-            action=row.get("action") or "PASS",
-            entry_price=row.get("entry_price") or 0.0,
+            action=action, entry_price=entry, filled=filled,
             stake_usd=row.get("stake_usd") or 0.0,
             interval=row.get("interval"),
             staleness_s=staleness,
