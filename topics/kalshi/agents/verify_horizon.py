@@ -43,6 +43,8 @@ class Window:
     interval: list | None = None
     staleness_s: float = 0.0
     source: str = ""               # which feed this came from
+    half_spread: float = 0.0       # cost of crossing to get out
+    realised_pnl: float = 0.0      # booked by the supervisor on a close
     filled: bool = True            # resting orders only fill if price came to them       # how far before the target the price is from
 
     @property
@@ -108,22 +110,21 @@ class Window:
 
     @property
     def pnl(self) -> float:
-        """Enter at the order's price, mark out at the realised mid.
+        """What the agent actually booked, not what it could have booked.
 
-        A resting order that never filled has no position and no pnl. That is
-        not a rounding detail: quoting inside the spread looks free until you
-        notice a bid fills exactly when the market is coming down to meet it,
-        so counting unfilled quotes as wins would invert the result.
+        The supervisor keeps the position and books a number when the agent
+        decides to close, or when the contract settles under an open position.
+        Nothing here re-derives it.
+
+        An earlier version marked every trade out at the five-minute mid, as
+        though a position opened itself and closed itself for free. On these
+        books that flattered the result badly: charging the exit turned one
+        match from -4.05% to -22.18%, because a round trip costs half a spread
+        plus two fees and the agent's predictions are two or three cents wide.
+        Now a position that is never closed is simply carried, and pays a dollar
+        or nothing.
         """
-        if self.action == "PASS" or not self.entry_price or not self.stake_usd:
-            return 0.0
-        if self.resting and not self.filled:
-            return 0.0
-        contracts = self.stake_usd / self.entry_price
-        exit_value = self.realised if self.long_yes else 1 - self.realised
-        cost = (maker_fee(self.entry_price) if self.resting
-                else taker_fee(self.entry_price))
-        return contracts * (exit_value - self.entry_price - cost)
+        return self.realised_pnl
 
 
 @dataclass
@@ -177,11 +178,18 @@ class HorizonReport:
         return sum(1 for w in seen if w.covered) / len(seen) if seen else 0.0
 
     @property
-    def taken(self) -> list[Window]:
-        """Orders that resulted in a position. A resting quote that the market
-        never came to is an order, not a trade."""
+    def opened(self) -> list[Window]:
+        return [w for w in self.windows if w.action.startswith("OPEN")]
+
+    @property
+    def closed(self) -> list[Window]:
+        """Round trips the agent decided to end, plus any paid at settlement."""
         return [w for w in self.windows
-                if w.action != "PASS" and (w.filled or not w.resting)]
+                if w.action in ("CLOSE", "SETTLE") or w.realised_pnl]
+
+    @property
+    def taken(self) -> list[Window]:
+        return self.closed
 
     @property
     def quoted(self) -> list[Window]:
@@ -191,6 +199,16 @@ class HorizonReport:
     def fill_rate(self) -> float:
         rest = [w for w in self.windows if w.resting]
         return sum(1 for w in rest if w.filled) / len(rest) if rest else 0.0
+
+    @property
+    def realised_pnl(self) -> float:
+        return sum(w.realised_pnl for w in self.windows)
+
+    @property
+    def settled_open(self) -> list[Window]:
+        """Positions carried all the way to settlement, having never been
+        closed. The expensive ones, usually."""
+        return [w for w in self.windows if w.action == "SETTLE"]
 
     @property
     def pnl(self) -> float:
@@ -265,13 +283,16 @@ class HorizonReport:
         if self.quoted:
             lines += [
                 "",
+                f"  opened            {len(self.opened)} positions, "
+                f"{len(self.closed)} closed "
+                f"({len(self.settled_open)} of them at settlement)",
                 f"  quoted            {len(self.quoted)} of {self.n} windows"
                 + (f", {len([w for w in self.windows if w.resting])} resting "
                    f"({self.fill_rate:.0%} filled)"
                    if any(w.resting for w in self.windows) else ""),
                 f"  traded            {len(self.taken)}",
-                f"  pnl               ${self.pnl:+,.2f} on ${self.staked:,.0f} "
-                f"({self.roi:+.2%})",
+                f"  pnl               ${self.pnl:+,.2f} realised on "
+                f"${self.staked:,.0f} staked ({self.roi:+.2%})",
                 f"  win rate          {self.win_rate:.1%}",
             ]
         else:
@@ -435,6 +456,11 @@ def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
             interval=row.get("interval"),
             staleness_s=staleness,
             source=file.parent.name,
+            realised_pnl=float(row.get("realised_pnl") or 0.0),
+            # Closing crosses half the spread. The book at entry is the best
+            # estimate available for what it will cost at exit.
+            half_spread=(max(0.0, (row.get("ask") or 0) - (row.get("bid") or 0))
+                         / 2),
         ))
     return report
 
