@@ -382,6 +382,7 @@ class Supervisor:
     async def _horizon_tick(self, pos: Position, fingerprint: tuple) -> dict:
         """Predict the price five minutes out; let arithmetic decide the trade."""
         from .horizon import HORIZON_MINUTES, decide, horizon_agent, target_time
+        from .validation import validate_horizon
         from ..quotes import Quotes
 
         # The supervisor already knows the fixture, so the game state is passed
@@ -403,7 +404,7 @@ class Supervisor:
                     if isinstance(predicted, (int, float))
                     else None)
 
-        return {"ts": _now(), "mode": "horizon", "ticker": pos.ticker,
+        entry = {"ts": _now(), "mode": "horizon", "ticker": pos.ticker,
                 "game_id": pos.game_id, "status": fingerprint[0],
                 "period": fingerprint[1], "score": f"{fingerprint[3]}-{fingerprint[2]}",
                 "horizon_minutes": HORIZON_MINUTES,
@@ -417,6 +418,19 @@ class Supervisor:
                 "entry_price": decision.entry_price if decision else 0.0,
                 "stake_usd": decision.size_usd if decision else 0.0,
                 "cost_usd": round(run.cost_usd, 4), "error": run.error}
+
+        # A forecast whose stated direction contradicts its own number has
+        # misread the book, and decide() will have built an edge out of the
+        # misreading. Refuse the trade, but keep the prediction: it is still
+        # scoreable, and still evidence about the harness.
+        check = validate_horizon(entry)
+        entry = check.corrected
+        entry["valid"] = check.ok
+        if check.errors or check.warnings:
+            entry["validation"] = check.errors + check.warnings
+            self._log("validation", ticker=pos.ticker, ok=check.ok,
+                      issues=check.errors + check.warnings)
+        return entry
 
     async def _sleep(self, seconds: float) -> None:
         with contextlib.suppress(asyncio.TimeoutError):

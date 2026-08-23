@@ -100,3 +100,59 @@ def validate(forecast: dict, previous: dict | None = None,
                 "this contract can only decay while nothing happens")
 
     return Check(not errors, out, errors, warnings)
+
+
+HORIZON_FLAT_TOLERANCE = 0.02
+
+
+def validate_horizon(forecast: dict, tolerance: float = HORIZON_FLAT_TOLERANCE) -> Check:
+    """Refuse to trade on a horizon forecast that contradicts itself.
+
+    The model states a direction and, separately, a number. When those disagree
+    it is not expressing a view — it has misread the book. One live example
+    said the price was "already fading back to 0.105" while the market was at
+    0.295, and labelled the forecast FLAT: in its own account the price had not
+    moved, because it thought the current price was the one it was predicting.
+
+    ``decide()`` compares the number to the real quote, so a misread current
+    price manufactures an edge out of nothing, and the bigger the misreading
+    the bigger the fake edge — the fee threshold then selects for exactly these.
+
+    Measured over 130 live windows: 7 carried this contradiction and scored
+    -29.7% against the no-change benchmark, while the other 123 scored -0.1%.
+    Both trades the run produced came from the seven. Forcing them to PASS
+    removes the loss without touching the model.
+    """
+    out = dict(forecast)
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    predicted, mid = out.get("predicted_mid"), out.get("mid_now")
+    stated = (out.get("direction") or "").upper()
+
+    if isinstance(predicted, (int, float)) and isinstance(mid, (int, float)):
+        delta = predicted - mid
+        implied = "FLAT" if abs(delta) < tolerance else ("UP" if delta > 0 else "DOWN")
+        if stated and stated != implied:
+            errors.append(
+                f"stated direction {stated} contradicts a predicted move of "
+                f"{delta:+.3f} from {mid:.3f} (implies {implied})")
+        if not 0 < predicted < 1:
+            errors.append(f"predicted_mid {predicted} is outside (0, 1)")
+
+    interval = out.get("interval")
+    if isinstance(interval, (list, tuple)) and len(interval) == 2 \
+            and isinstance(predicted, (int, float)):
+        low, high = sorted(interval)
+        if not low <= predicted <= high:
+            warnings.append(
+                f"interval [{low}, {high}] excludes its own point estimate "
+                f"{predicted}")
+
+    if errors and out.get("action") not in (None, "PASS"):
+        out["action"] = "PASS"
+        out["stake_usd"] = 0.0
+        out["edge"] = 0.0
+        out["suppressed"] = True
+
+    return Check(ok=not errors, errors=errors, warnings=warnings, corrected=out)
