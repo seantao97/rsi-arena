@@ -172,7 +172,8 @@ def is_fixture_event(event_ticker: str) -> bool:
 def link_event(client: KalshiClient, event_ticker: str, league: str,
                games_by_date, min_confidence: float = 0.6,
                series_ticker: str | None = None,
-               names: dict[str, str] | None = None) -> Link | None:
+               names: dict[str, str] | None = None,
+               codes: set[str] | None = None) -> Link | None:
     """Resolve one event to its fixture in the game feed.
 
     ``link_series`` walks every open event under a series to find one match,
@@ -180,7 +181,10 @@ def link_event(client: KalshiClient, event_ticker: str, league: str,
     costs one market sweep for the team codes plus one day of fixtures.
     """
     series = series_ticker or event_ticker.split("-")[0]
-    codes = harvest_team_codes(client, series)
+    # A series whose outcomes are thresholds publishes no team codes at all, so
+    # a caller that pooled them across the league supplies a set that can
+    # actually split the blob.
+    codes = codes or harvest_team_codes(client, series)
     fixture = parse_event_ticker(event_ticker, series, codes)
     if not fixture or not fixture.is_split:
         return None
