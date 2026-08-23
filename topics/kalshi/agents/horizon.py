@@ -308,6 +308,17 @@ def _make(predicted: float, low: float, high: float, bid: float, ask: float,
                     f"edge {edge:+.4f} after maker fees")
 
 
+def horizon_tools() -> Toolbox:
+    """Just the three tools the plan calls.
+
+    Worth about 70 tokens a forecast against the full nineteen-tool box — the
+    saving is not the point. An agent that cannot reach a tool cannot surprise
+    you by reaching for it, which matters once a model is rewriting this
+    harness.
+    """
+    return Toolbox([market_quote, price_history, recent_trades])
+
+
 def horizon_agent(config: AgentConfig | None = None,
                   tools: Toolbox | None = None,
                   minutes: int = HORIZON_MINUTES) -> Agent:
