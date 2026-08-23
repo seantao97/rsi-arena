@@ -67,13 +67,15 @@ class Position:
 class Supervisor:
     """Runs forecasting agents until their contracts settle."""
 
-    def __init__(self, league: str, agent: str = "inplay",
+    def __init__(self, league: str | list[str], agent: str = "inplay",
                  poll_s: float = 45.0, price_step: float = 0.03,
                  budget_usd: float = 10.0, per_run_usd: float = 0.30,
                  state_dir: str = "~/.kalshi-agent", mode: str = "inplay",
                  discover: bool = False, max_contracts: int = 4,
                  rescan_s: float = 300.0, max_failures: int = 6) -> None:
-        self.league = league
+        self.leagues = ([league] if isinstance(league, str)
+                        else [x for x in league if x])
+        self.league = self.leagues[0]      # positions without one fall back here
         self.agent_name = agent
         self.mode = mode
         self.discover = discover
@@ -130,8 +132,11 @@ class Supervisor:
 
     # ---------- lifecycle ----------
 
-    def add(self, ticker: str) -> None:
-        self.positions.setdefault(ticker, Position(ticker=ticker, league=self.league))
+    def add(self, ticker: str, league: str | None = None) -> None:
+        """Take on a contract. ``league`` is per-position, because one
+        supervisor may be sweeping several at once."""
+        self.positions.setdefault(
+            ticker, Position(ticker=ticker, league=league or self.league))
 
     def stop(self) -> None:
         self._stop.set()
@@ -184,27 +189,70 @@ class Supervisor:
                 active = sum(1 for p in self.positions.values() if not p.settled)
                 room = self.max_contracts - active
                 if room > 0:
-                    found = await live_markets(league=self.league, limit=30)
+                    # Leagues are swept concurrently. Measured against the live
+                    # API, twenty of them together take about as long as two in
+                    # sequence, and none of them come back short — the counts
+                    # match what each returns on its own.
+                    swept = await asyncio.gather(
+                        *(live_markets(league=lg, limit=30) for lg in self.leagues),
+                        return_exceptions=True)
+
+                    games: list[tuple[str, list]] = []
+                    for lg, found in zip(self.leagues, swept):
+                        if isinstance(found, BaseException):
+                            self._log("discovery_error", league=lg,
+                                      error=f"{type(found).__name__}: {found}")
+                            continue
+                        for game in (found.output or {}).get("markets", []):
+                            tradeable = [m for m in game["markets"]
+                                         # No two-sided quote means it can be
+                                         # neither traded nor scored.
+                                         if m.get("yes_bid") and m.get("yes_ask")
+                                         and m["ticker"] not in self.positions]
+                            if tradeable:
+                                games.append((lg, sorted(
+                                    tradeable,
+                                    key=lambda m: -(m.get("volume") or 0))))
+
+                    # Round-robin twice: across leagues, then across the games
+                    # within each. One contract per game before any game gets a
+                    # second, and one game per league before any league gets a
+                    # second.
+                    #
+                    # Both matter. Four contracts on one match are four
+                    # correlated observations where four matches are four
+                    # independent ones, and the scoring needs the latter. And
+                    # without the league pass a busy competition takes every
+                    # slot — MLS alone had seven live fixtures here, enough to
+                    # shut out four other leagues that were also playing.
+                    by_league: dict[str, list] = {}
+                    for lg, ranked in games:
+                        by_league.setdefault(lg, []).append(ranked)
+
+                    order: list[tuple[str, list]] = []
+                    for depth in range(max((len(v) for v in by_league.values()),
+                                           default=0)):
+                        for lg in self.leagues:
+                            bucket = by_league.get(lg) or []
+                            if depth < len(bucket):
+                                order.append((lg, bucket[depth]))
+
                     added = 0
-                    for game in (found.output or {}).get("markets", []):
-                        ranked = sorted(game["markets"],
-                                        key=lambda m: -(m.get("volume") or 0))
-                        for market in ranked:
-                            ticker = market["ticker"]
+                    for depth in range(max((len(g) for _, g in order), default=0)):
+                        for lg, ranked in order:
                             if added >= room:
                                 break
-                            if ticker in self.positions:
+                            if depth >= len(ranked):
                                 continue
-                            # A market with no two-sided quote cannot be traded
-                            # or scored, so it is not worth a slot.
-                            if not market.get("yes_bid") or not market.get("yes_ask"):
-                                continue
-                            self.add(ticker)
-                            self._workers[ticker] = asyncio.create_task(
-                                self._own(ticker))
-                            self._log("discovered", ticker=ticker,
-                                      volume=market.get("volume"))
+                            market = ranked[depth]
+                            self.add(market["ticker"], league=lg)
+                            self._workers[market["ticker"]] = asyncio.create_task(
+                                self._own(market["ticker"]))
+                            self._log("discovered", ticker=market["ticker"],
+                                      league=lg, volume=market.get("volume"))
                             added += 1
+                        if added >= room:
+                            break
                     if added:
                         self._save()
             except asyncio.CancelledError:
@@ -391,7 +439,8 @@ async def _auto_contracts(league: str, limit: int) -> list[str]:
 
 async def main() -> int:
     ap = argparse.ArgumentParser(description="Run Kalshi forecasting agents as a service")
-    ap.add_argument("--league", required=True)
+    ap.add_argument("--league", required=True,
+                    help="one league, or a comma-separated list to sweep together")
     ap.add_argument("--contracts", default="", help="comma separated tickers")
     ap.add_argument("--discover", action="store_true",
                     help="find live markets continuously and keep going")
@@ -406,7 +455,8 @@ async def main() -> int:
     ap.add_argument("--state-dir", default="~/.kalshi-agent")
     args = ap.parse_args()
 
-    sup = Supervisor(args.league, args.agent, args.poll, args.price_step,
+    leagues = [x.strip().upper() for x in args.league.split(",") if x.strip()]
+    sup = Supervisor(leagues, args.agent, args.poll, args.price_step,
                      args.budget, args.per_run, args.state_dir,
                      mode=args.mode, discover=args.discover,
                      max_contracts=args.max_contracts, rescan_s=args.rescan)
