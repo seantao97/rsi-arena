@@ -112,14 +112,43 @@ PREDICTION_SCHEMA = {
 
 
 @dataclass(frozen=True)
-class Decision:
-    """What the arithmetic says to do with a prediction."""
+class Holding:
+    """An open position. Nothing closes it but a decision, or settlement."""
 
-    action: str                    # BUY_YES | BUY_NO | MAKE_YES | MAKE_NO | PASS
-    edge: float                    # expected move per contract, net of fees
+    side: str                      # YES | NO
+    price: float                   # what a contract cost
+    contracts: float
+    fee_paid: float                # entry fee, in dollars, already sunk
+    opened_at: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> "Holding | None":
+        return cls(**data) if data else None
+
+    def value_at(self, yes_price: float) -> float:
+        """What the position is worth per contract at a given yes price."""
+        return yes_price if self.side == "YES" else 1 - yes_price
+
+
+@dataclass(frozen=True)
+class Decision:
+    """What the arithmetic says to do, given the prediction and the book.
+
+    Opening and closing are both decisions. Nothing is marked out
+    automatically: a position that is never closed is held to settlement and
+    pays what the contract pays, which is the honest treatment and usually the
+    expensive one.
+    """
+
+    action: str                    # OPEN_YES | OPEN_NO | CLOSE | HOLD | PASS
+    edge: float                    # per contract, net of fees
     entry_price: float
     size_usd: float
     reason: str
+    resting: bool = False          # posted inside the spread rather than taking
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -142,26 +171,26 @@ def decide(predicted_mid: float, bid: float | None, ask: float | None,
            confidence: float = 0.5, bankroll: float = 50_000.0,
            min_edge: float = 0.01, max_fraction: float = 0.02,
            interval: list | tuple | None = None,
-           allow_maker: bool = True) -> Decision:
-    """Turn a predicted price into an action against the live book.
+           allow_maker: bool = True,
+           holding: Holding | None = None) -> Decision:
+    """Decide what to do, given the prediction, the book, and what is held.
+
+    Two questions, in order. If something is open, the only question is whether
+    to close it — no averaging in, no reversing in one step. If nothing is open,
+    the question is whether to open.
 
     The prediction is a two-sided quote of the agent's own: ``interval`` is
-    where it thinks the price will be, and the trade is only justified when the
-    exchange's quote sits entirely outside it. So the edge is measured from the
-    **near edge of the interval**, not from its middle — buying yes at the ask
-    has to beat the low end of the predicted range, not just its centre.
+    where it thinks the price will be, and a trade is only justified when the
+    exchange's quote sits outside it. The edge is therefore measured from the
+    **near edge** of the interval, not its middle, so a wide interval stops
+    producing trades on its own and no confidence threshold is needed on top.
 
-    That makes the interval load-bearing. A wide interval is the agent saying it
-    does not know, and it stops producing trades on its own, without a
-    confidence threshold bolted on top.
-
-    Falls back to the point prediction when no usable interval is given.
-
-    Size scales with confidence and is capped, because being right about
-    direction five minutes out says nothing about magnitude.
+    Nothing is closed automatically. A position the agent never decides to exit
+    is carried to settlement and pays what the contract pays.
     """
     if bid is None or ask is None or not 0 < bid <= ask < 1:
-        return Decision("PASS", 0.0, 0.0, 0.0, "no two-sided market")
+        return Decision("HOLD" if holding else "PASS", 0.0, 0.0, 0.0,
+                        "no two-sided market")
 
     low = high = predicted_mid
     if isinstance(interval, (list, tuple)) and len(interval) == 2:
@@ -170,43 +199,61 @@ def decide(predicted_mid: float, bid: float | None, ask: float | None,
         except (TypeError, ValueError):
             low = high = predicted_mid
         # An interval that excludes its own point estimate is incoherent; the
-        # point estimate is the thing the model was actually asked for.
+        # point estimate is what the model was actually asked for.
         if not low <= predicted_mid <= high:
             low = high = predicted_mid
+
+    if holding is not None:
+        return _exit(holding, predicted_mid, bid, ask, min_edge)
 
     yes_edge = low - (ask + taker_fee(ask))
     no_edge = (1 - high) - ((1 - bid) + taker_fee(1 - bid))
 
     if yes_edge >= no_edge and yes_edge > min_edge:
-        action, edge, entry = "BUY_YES", yes_edge, ask
+        action, edge, entry, resting = "OPEN_YES", yes_edge, ask, False
     elif no_edge > min_edge:
-        action, edge, entry = "BUY_NO", no_edge, 1 - bid
-    elif allow_maker and predicted_mid is not None:
+        action, edge, entry, resting = "OPEN_NO", no_edge, 1 - bid, False
+    elif allow_maker:
         return _make(predicted_mid, low, high, bid, ask, confidence,
                      bankroll, min_edge, max_fraction)
     else:
         best = max(yes_edge, no_edge)
-        note = "" if low == high else f" (worst case of [{low:.2f}, {high:.2f}])"
         return Decision("PASS", round(best, 4), 0.0, 0.0,
-                        f"best edge {best:+.4f}{note} does not clear {min_edge:.0%}")
+                        f"best edge {best:+.4f} does not clear {min_edge:.0%}")
 
     fraction = max_fraction * max(0.0, min(1.0, confidence))
-    bound = "point" if low == high else f"[{low:.2f}, {high:.2f}]"
     return Decision(action, round(edge, 4), entry,
                     round(bankroll * fraction, 2),
-                    f"{action} at {entry:.2f}, edge {edge:+.4f} after fees "
-                    f"vs {bound}")
+                    f"{action} at {entry:.2f}, edge {edge:+.4f} after fees",
+                    resting)
 
 
-def horizon_tools() -> Toolbox:
-    """Just the three tools the plan calls.
+def _exit(holding: Holding, predicted_mid: float, bid: float, ask: float,
+          min_edge: float) -> Decision:
+    """Close, or carry on holding.
 
-    Worth about 70 tokens a forecast against the full nineteen-tool box —
-    the saving is not the point. An agent that cannot reach a tool cannot
-    surprise you by reaching for it, which matters once a model is rewriting
-    this harness.
+    Closing is a taker order — a resting exit may never fill, and a position
+    that cannot be got out of is not a position that was ever really closed.
+    Selling a yes contract nets the bid less the fee; buying back a no costs
+    the ask side. Either way the comparison is the same: is getting out now
+    worth more than what the position is expected to be worth in five minutes?
     """
-    return Toolbox([market_quote, price_history, recent_trades])
+    if holding.side == "YES":
+        proceeds = bid - taker_fee(bid)
+        expected = predicted_mid
+    else:
+        proceeds = (1 - ask) - taker_fee(1 - ask)
+        expected = 1 - predicted_mid
+
+    gain = proceeds - expected
+    if gain > min_edge:
+        return Decision("CLOSE", round(gain, 4), round(proceeds, 4),
+                        round(holding.contracts * proceeds, 2),
+                        f"close {holding.side} at {proceeds:.3f} net; holding "
+                        f"is only worth {expected:.3f} in five minutes")
+    return Decision("HOLD", round(gain, 4), holding.price, 0.0,
+                    f"hold {holding.side} from {holding.price:.3f}; exiting "
+                    f"nets {proceeds:.3f} against an expected {expected:.3f}")
 
 
 def _make(predicted: float, low: float, high: float, bid: float, ask: float,
@@ -236,13 +283,18 @@ def _make(predicted: float, low: float, high: float, bid: float, ask: float,
     post_bid = min(max(low, bid + 0.01), ask - 0.01)
     post_ask = max(min(high, ask - 0.01), bid + 0.01)
 
-    yes_edge = predicted - (post_bid + maker_fee(post_bid))
-    no_edge = (1 - predicted) - ((1 - post_ask) + maker_fee(1 - post_ask))
+    # Measured from the near edge of the interval, exactly as the taker path
+    # does. Using the point estimate here let a wide interval sail through the
+    # maker branch after failing the taker one — which defeated the property
+    # the interval exists for: a model that does not know says so by widening,
+    # and stops producing trades on its own.
+    yes_edge = low - (post_bid + maker_fee(post_bid))
+    no_edge = (1 - high) - ((1 - post_ask) + maker_fee(1 - post_ask))
 
     if yes_edge >= no_edge and yes_edge > min_edge and bid < post_bid < ask:
-        action, edge, entry = "MAKE_YES", yes_edge, post_bid
+        action, edge, entry = "OPEN_YES", yes_edge, post_bid
     elif no_edge > min_edge and bid < post_ask < ask:
-        action, edge, entry = "MAKE_NO", no_edge, 1 - post_ask
+        action, edge, entry = "OPEN_NO", no_edge, 1 - post_ask
     else:
         best = max(yes_edge, no_edge)
         return Decision("PASS", round(best, 4), 0.0, 0.0,

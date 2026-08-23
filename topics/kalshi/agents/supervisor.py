@@ -61,6 +61,9 @@ class Position:
     result: str | None = None
     last_fingerprint: tuple | None = None
     last_record: dict | None = None
+    holding: dict | None = None            # an open position, or nothing
+    realised_pnl: float = 0.0              # closed round trips only
+    trades: int = 0
     last_error: str | None = None
 
 
@@ -312,8 +315,28 @@ class Supervisor:
         result = await asyncio.to_thread(History().settlement, pos.ticker)
         if result is not None:
             pos.settled, pos.result = True, result
+            if pos.holding:
+                # Never closed, so it pays what the contract pays — a dollar or
+                # nothing. This is the cost of not deciding to get out.
+                from .horizon import Holding as _H
+                held = _H.from_dict(pos.holding)
+                payout = 1.0 if ((result == "yes") == (held.side == "YES")) else 0.0
+                settled_pnl = round(held.contracts * (payout - held.price)
+                                    - held.fee_paid, 2)
+                pos.realised_pnl = round(pos.realised_pnl + settled_pnl, 2)
+                self._log("settled_open_position", ticker=pos.ticker,
+                          side=held.side, entry=held.price, payout=payout,
+                          pnl=settled_pnl)
+                self._record({"ts": _now(), "mode": "horizon",
+                              "ticker": pos.ticker, "action": "SETTLE",
+                              "settle_result": result, "side": held.side,
+                              "entry_price": held.price,
+                              "contracts": held.contracts,
+                              "realised_pnl": settled_pnl})
+                pos.holding = None
             self._log("settled", ticker=pos.ticker, result=result,
-                      forecasts=pos.forecasts, spent=round(pos.spent_usd, 4))
+                      forecasts=pos.forecasts, pnl=pos.realised_pnl,
+                      trades=pos.trades, spent=round(pos.spent_usd, 4))
             self._save()
             return
 
@@ -381,8 +404,9 @@ class Supervisor:
 
     async def _horizon_tick(self, pos: Position, fingerprint: tuple) -> dict:
         """Predict the price five minutes out; let arithmetic decide the trade."""
-        from .horizon import (HORIZON_MINUTES, decide, horizon_agent, quote_from,
-                              target_time)
+        from .horizon import (HORIZON_MINUTES, Holding, decide, horizon_agent,
+                              quote_from, target_time)
+        from ..fees import maker_fee, taker_fee
         from .validation import validate_horizon
         from ..quotes import Quotes
 
@@ -402,13 +426,38 @@ class Supervisor:
         # The anchor is the exchange's mid, never the model's reading of it.
         delta = out.get("delta_cents")
         width = out.get("half_width_cents")
+        held = Holding.from_dict(pos.holding)
         predicted = interval = decision = None
         if isinstance(delta, (int, float)) and quote.mid is not None:
             predicted, low, high = quote_from(
                 quote.mid, delta, width if isinstance(width, (int, float)) else 3.0)
             interval = [round(low, 4), round(high, 4)]
             decision = decide(predicted, quote.yes_bid, quote.yes_ask,
-                              out.get("confidence") or 0.5, interval=interval)
+                              out.get("confidence") or 0.5, interval=interval,
+                              holding=held)
+
+        # Book-keeping lives here, not in the scorer. A position opens when the
+        # agent says so and closes when the agent says so; nothing is marked out
+        # on a timer. Whatever is still open when the contract settles is paid
+        # at settlement, which is the expensive and honest treatment.
+        realised = 0.0
+        if decision and decision.action.startswith("OPEN") and held is None:
+            side = "YES" if decision.action == "OPEN_YES" else "NO"
+            contracts = (decision.size_usd / decision.entry_price
+                         if decision.entry_price else 0.0)
+            fee = (maker_fee if decision.resting else taker_fee)(
+                decision.entry_price) * contracts
+            pos.holding = Holding(side=side, price=decision.entry_price,
+                                  contracts=round(contracts, 2),
+                                  fee_paid=round(fee, 4),
+                                  opened_at=_now()).to_dict()
+            pos.trades += 1
+        elif decision and decision.action == "CLOSE" and held is not None:
+            proceeds = decision.entry_price          # already net of exit fee
+            realised = round(held.contracts * proceeds
+                             - held.contracts * held.price - held.fee_paid, 2)
+            pos.realised_pnl = round(pos.realised_pnl + realised, 2)
+            pos.holding = None
 
         entry = {"ts": _now(), "mode": "horizon", "ticker": pos.ticker,
                 "game_id": pos.game_id, "status": fingerprint[0],
@@ -424,6 +473,10 @@ class Supervisor:
                 "edge": decision.edge if decision else 0.0,
                 "entry_price": decision.entry_price if decision else 0.0,
                 "stake_usd": decision.size_usd if decision else 0.0,
+                "resting": bool(decision.resting) if decision else False,
+                "holding": pos.holding,
+                "realised_pnl": realised,
+                "reason": decision.reason if decision else "",
                 "cost_usd": round(run.cost_usd, 4), "error": run.error}
 
         # A forecast whose stated direction contradicts its own number has
