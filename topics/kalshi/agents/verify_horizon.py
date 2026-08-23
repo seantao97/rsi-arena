@@ -301,6 +301,13 @@ def _filled(history: History, ticker: str, placed: datetime, due: datetime,
     as filling there, when in reality a queue may not clear. That errs toward
     counting fills, which errs against the agent — an unfilled quote can only
     ever have been free.
+
+    Measured on the first eleven resting quotes this produced, the optimism did
+    not matter: every one traded strictly *through* its price, by two to
+    twenty-one cents rather than by a tick. The books wide enough to rest a
+    quote inside are wide because they are thin, and a thin book moves further
+    in five minutes than the distance to any quote sitting in it. A hundred per
+    cent fill rate there is the market, not the model.
     """
     candles = history.candles(ticker, placed, due, MINUTE)
     if not candles:
