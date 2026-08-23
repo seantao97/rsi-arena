@@ -203,11 +203,17 @@ def decide(predicted_mid: float, bid: float | None, ask: float | None,
         if not low <= predicted_mid <= high:
             low = high = predicted_mid
 
+    half_spread = (ask - bid) / 2
     if holding is not None:
-        return _exit(holding, predicted_mid, bid, ask, min_edge)
+        return _exit(holding, predicted_mid, bid, ask, half_spread, min_edge)
 
-    yes_edge = low - (ask + taker_fee(ask))
-    no_edge = (1 - high) - ((1 - bid) + taker_fee(1 - bid))
+    # A round trip, not a leg. Buying yes costs the ask and a fee; getting out
+    # means selling at the *bid* five minutes later and paying another fee. The
+    # mid is not a price anyone trades at, so an edge measured to the mid is
+    # short by half a spread on the way in and half a spread on the way out.
+    yes_edge = _exit_proceeds(low - half_spread) - (ask + taker_fee(ask))
+    no_edge = (_exit_proceeds(1 - high - half_spread)
+               - ((1 - bid) + taker_fee(1 - bid)))
 
     if yes_edge >= no_edge and yes_edge > min_edge:
         action, edge, entry, resting = "OPEN_YES", yes_edge, ask, False
@@ -228,22 +234,31 @@ def decide(predicted_mid: float, bid: float | None, ask: float | None,
                     resting)
 
 
+def _exit_proceeds(price: float) -> float:
+    """What selling at ``price`` actually nets, after the taker fee."""
+    price = min(0.99, max(0.01, price))
+    return price - taker_fee(price)
+
+
 def _exit(holding: Holding, predicted_mid: float, bid: float, ask: float,
-          min_edge: float) -> Decision:
+          half_spread: float, min_edge: float) -> Decision:
     """Close, or carry on holding.
 
     Closing is a taker order — a resting exit may never fill, and a position
     that cannot be got out of is not a position that was ever really closed.
-    Selling a yes contract nets the bid less the fee; buying back a no costs
-    the ask side. Either way the comparison is the same: is getting out now
-    worth more than what the position is expected to be worth in five minutes?
+
+    Both sides of the comparison are prices something can actually be sold at.
+    Getting out now nets the bid less a fee; holding means getting out later at
+    a bid that is half a spread below wherever the mid lands, less a fee then.
+    Comparing today's executable price against tomorrow's *mid* would make
+    holding look better than it is by half a spread, every time.
     """
     if holding.side == "YES":
-        proceeds = bid - taker_fee(bid)
-        expected = predicted_mid
+        proceeds = _exit_proceeds(bid)
+        expected = _exit_proceeds(predicted_mid - half_spread)
     else:
-        proceeds = (1 - ask) - taker_fee(1 - ask)
-        expected = 1 - predicted_mid
+        proceeds = _exit_proceeds(1 - ask)
+        expected = _exit_proceeds(1 - predicted_mid - half_spread)
 
     gain = proceeds - expected
     if gain > min_edge:
@@ -288,8 +303,12 @@ def _make(predicted: float, low: float, high: float, bid: float, ask: float,
     # maker branch after failing the taker one — which defeated the property
     # the interval exists for: a model that does not know says so by widening,
     # and stops producing trades on its own.
-    yes_edge = low - (post_bid + maker_fee(post_bid))
-    no_edge = (1 - high) - ((1 - post_ask) + maker_fee(1 - post_ask))
+    # Resting saves the spread and most of the fee on the way in. It saves
+    # nothing on the way out: the exit is still a taker order at the bid.
+    half_spread = (ask - bid) / 2
+    yes_edge = _exit_proceeds(low - half_spread) - (post_bid + maker_fee(post_bid))
+    no_edge = (_exit_proceeds(1 - high - half_spread)
+               - ((1 - post_ask) + maker_fee(1 - post_ask)))
 
     if yes_edge >= no_edge and yes_edge > min_edge and bid < post_bid < ask:
         action, edge, entry = "OPEN_YES", yes_edge, post_bid
