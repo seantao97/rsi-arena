@@ -38,6 +38,15 @@ MLB_API = "https://statsapi.mlb.com/api/v1"
 NHL_API = "https://api-web.nhle.com/v1"
 ESPN_API = "https://site.api.espn.com/apis/site/v2/sports"
 
+# The same API is served from a second host, and the two do not sit behind the
+# same rules. From a GitHub Actions runner, site.api returns 403 to every
+# request while site.web.api returns the identical 41KB of JSON — probed
+# side by side, same path, same headers, byte-for-byte the same body. A run
+# scheduled in the cloud therefore saw no fixtures at all, adopted nothing for
+# 165 minutes, and reported no error, because there was no error to report:
+# discovery had simply been told the schedule was empty.
+ESPN_API_FALLBACK = "https://site.web.api.espn.com/apis/site/v2/sports"
+
 # Routing comes from taxonomy.COMPETITIONS — the single source of truth for
 # which league maps to which ESPN endpoint. This module used to keep its own
 # copy, which duplicated ten soccer leagues and kept them in step by luck.
@@ -225,7 +234,25 @@ def _get(url: str, timeout: int = 20, throttle: bool = False) -> dict:
             if wait > 0:
                 time.sleep(wait)
             _ESPN_LAST[0] = time.monotonic()
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        return _fetch(url, timeout)
+    except urllib.error.HTTPError as exc:
+        # Only a block is worth retrying elsewhere. A 404 means the fixture is
+        # not there, and asking a second host will not change that.
+        if exc.code not in (403, 451) or ESPN_API not in url:
+            raise
+        return _fetch(url.replace(ESPN_API, ESPN_API_FALLBACK), timeout)
+
+
+def _fetch(url: str, timeout: int) -> dict:
+    req = urllib.request.Request(url, headers={
+        "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/126.0 Safari/537.36"),
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.espn.com/",
+    })
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())
 
