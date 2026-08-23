@@ -385,15 +385,48 @@ def devig_odds(american_odds: list[float]) -> dict:
 
 # --- joining a market to a game --------------------------------------------
 
+def league_team_names(league: str) -> tuple[set[str], dict[str, str]]:
+    """A league's team codes, and what Kalshi calls each of them.
+
+    Both have to come from the league rather than from one series. A fixture's
+    markets are spread across many series and only some of them mention teams
+    at all: ``KXEPLGAME`` and ``KXEPLSPREAD`` carry all twenty codes, while
+    ``KXEPLTOTAL`` and ``KXEPLCORNERS`` carry none, because their outcomes are
+    thresholds. Asked about a totals event on its own, the parser has no codes
+    to split ``NEWLFC`` with and the fixture is unlinkable — not because the
+    fixture is unknown, but because that corner of it happens not to name the
+    teams.
+
+    Pooling across the league fixes both halves at once: the codes to split the
+    blob, and the names to score it against the feed. The sweep is cached, so
+    this costs nothing after the first call.
+    """
+    try:
+        refs = list(_discovery.whats_bettable(league=league, fixtures_only=True))
+    except Exception:
+        return set(), {}
+    names = names_from_markets(refs)
+    codes = set(names)
+    for ref in refs:
+        tail = ref.ticker.rsplit("-", 1)[-1] if "-" in ref.ticker else ""
+        # Codes appear with a rung number attached on ladder markets — NEW2 is
+        # Newcastle's second line, not a different club.
+        stem = tail.rstrip("0123456789")
+        if stem and stem in names:
+            codes.add(stem)
+    return codes, names
+
+
 @tool
 async def find_game_for_market(event_ticker: str, league: str) -> dict:
     """Work out which real fixture a Kalshi event refers to.
 
     Returns the game id the game-state tools need.
     """
+    codes, names = await asyncio.to_thread(league_team_names, league)
     link = await asyncio.to_thread(
         link_event, _client, event_ticker, league,
-        lambda lg, day: gs.todays_games(lg, day))
+        lambda lg, day: gs.todays_games(lg, day), 0.6, None, names, codes)
     if link:
         return {"game_id": link.game_id, "league": league, "home": link.home,
                 "away": link.away, "confidence": link.confidence,
