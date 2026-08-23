@@ -105,49 +105,56 @@ def validate(forecast: dict, previous: dict | None = None,
 HORIZON_FLAT_TOLERANCE = 0.02
 
 
-def validate_horizon(forecast: dict, tolerance: float = HORIZON_FLAT_TOLERANCE) -> Check:
-    """Refuse to trade on a horizon forecast that contradicts itself.
+def validate_horizon(forecast: dict, tolerance: float = HORIZON_FLAT_TOLERANCE,
+                     max_half_width: float = 25.0,
+                     max_delta: float = 50.0) -> Check:
+    """Refuse to trade on a horizon forecast that does not hold together.
 
-    The model states a direction and, separately, a number. When those disagree
-    it is not expressing a view — it has misread the book. One live example
-    said the price was "already fading back to 0.105" while the market was at
-    0.295, and labelled the forecast FLAT: in its own account the price had not
-    moved, because it thought the current price was the one it was predicting.
+    The contradiction this used to catch — a stated direction disagreeing with
+    the model's own number — can no longer occur. The model states a change and
+    a quote width, and the code applies both to the exchange's mid, so there is
+    no second opinion about the current price to disagree with. That was the
+    defect: over 144 live forecasts, both trades produced came from misreading
+    the book, one describing a price "already fading back to 0.105" while the
+    market was at 0.295. The bigger the misreading, the bigger the fake edge,
+    so the fee threshold selected for exactly those.
 
-    ``decide()`` compares the number to the real quote, so a misread current
-    price manufactures an edge out of nothing, and the bigger the misreading
-    the bigger the fake edge — the fee threshold then selects for exactly these.
-
-    Measured over 130 live windows: 7 carried this contradiction and scored
-    -29.7% against the no-change benchmark, while the other 123 scored -0.1%.
-    Both trades the run produced came from the seven. Forcing them to PASS
-    removes the loss without touching the model.
+    What is still worth refusing is a quote the model cannot mean. A half width
+    of zero claims a price known to the cent five minutes out; a move of fifty
+    cents in five minutes is a different contract, not a forecast.
     """
     out = dict(forecast)
     errors: list[str] = []
     warnings: list[str] = []
 
-    predicted, mid = out.get("predicted_mid"), out.get("mid_now")
-    stated = (out.get("direction") or "").upper()
+    delta = out.get("delta_cents")
+    width = out.get("half_width_cents")
 
-    if isinstance(predicted, (int, float)) and isinstance(mid, (int, float)):
-        delta = predicted - mid
-        implied = "FLAT" if abs(delta) < tolerance else ("UP" if delta > 0 else "DOWN")
-        if stated and stated != implied:
-            errors.append(
-                f"stated direction {stated} contradicts a predicted move of "
-                f"{delta:+.3f} from {mid:.3f} (implies {implied})")
-        if not 0 < predicted < 1:
-            errors.append(f"predicted_mid {predicted} is outside (0, 1)")
+    if delta is not None and not isinstance(delta, (int, float)):
+        errors.append(f"delta_cents {delta!r} is not a number")
+    elif isinstance(delta, (int, float)) and abs(delta) > max_delta:
+        errors.append(f"delta_cents {delta:+.1f} exceeds {max_delta:.0f}c over "
+                      "five minutes")
+
+    if isinstance(width, (int, float)):
+        if width <= 0:
+            errors.append("half_width_cents of zero claims a price known exactly "
+                          "five minutes ahead")
+        elif width > max_half_width:
+            warnings.append(f"half_width_cents {width:.1f} is wider than the whole "
+                            "tradeable range; nothing will clear")
+
+    predicted, mid = out.get("predicted_mid"), out.get("mid_now")
+    if isinstance(predicted, (int, float)) and not 0 < predicted < 1:
+        errors.append(f"predicted_mid {predicted} is outside (0, 1)")
 
     interval = out.get("interval")
     if isinstance(interval, (list, tuple)) and len(interval) == 2 \
             and isinstance(predicted, (int, float)):
         low, high = sorted(interval)
         if not low <= predicted <= high:
-            warnings.append(
-                f"interval [{low}, {high}] excludes its own point estimate "
-                f"{predicted}")
+            errors.append(f"quote [{low}, {high}] excludes its own prediction "
+                          f"{predicted}")
 
     if errors and out.get("action") not in (None, "PASS"):
         out["action"] = "PASS"
