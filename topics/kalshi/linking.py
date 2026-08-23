@@ -171,7 +171,8 @@ def is_fixture_event(event_ticker: str) -> bool:
 
 def link_event(client: KalshiClient, event_ticker: str, league: str,
                games_by_date, min_confidence: float = 0.6,
-               series_ticker: str | None = None) -> Link | None:
+               series_ticker: str | None = None,
+               names: dict[str, str] | None = None) -> Link | None:
     """Resolve one event to its fixture in the game feed.
 
     ``link_series`` walks every open event under a series to find one match,
@@ -187,7 +188,12 @@ def link_event(client: KalshiClient, event_ticker: str, league: str,
         games = games_by_date(league, fixture.date.isoformat())
     except Exception:
         return None
-    link = match_event_to_game(fixture, games, min_confidence)
+    # A caller sweeping a league already holds every market and can build the
+    # whole code-to-club map from them for nothing. Only pay for a lookup when
+    # it did not.
+    link = match_event_to_game(
+        fixture, games, min_confidence,
+        names=names if names is not None else team_names(client, event_ticker))
     if not link:
         return None
     return Link(link.event_ticker, league, link.game_id, link.home, link.away,
@@ -263,21 +269,37 @@ def _score_match(kalshi_code: str, feed_name: str) -> float:
 
 
 def match_event_to_game(fixture: Fixture, games: list[dict],
-                        min_confidence: float = 0.6) -> Link | None:
+                        min_confidence: float = 0.6,
+                        names: dict[str, str] | None = None) -> Link | None:
     """Match one parsed fixture against a league's fixtures for that date.
 
     ``games`` is the output of ``gamestate.todays_games`` — dicts with ``id``,
     ``home``, ``away`` and ``start``.
+
+    ``names`` maps a team code to the club name Kalshi prints for it. Scoring a
+    code against a feed name only works when the code is an abbreviation of it,
+    and plenty are not: Liverpool trades as ``LFC``, for the club's initials
+    rather than its name, so ``LFC`` against "Liverpool" scores nothing and a
+    real fixture goes unlinked. Kalshi labels the market "Liverpool", so when
+    that label is available it is scored instead of the code.
     """
     if not fixture.is_split:
         return None
+    names = names or {}
+
+    def side(code: str, feed: str) -> float:
+        # Whichever reading matches better. The label is usually right, but a
+        # code can still win where Kalshi's label is the shorter of the two.
+        return max(_score_match(code, feed),
+                   _score_match(names.get(code, ""), feed) if names else 0.0)
+
     best, best_score = None, 0.0
     for g in games:
-        direct = (_score_match(fixture.away_code or "", g.get("away", "")) +
-                  _score_match(fixture.home_code or "", g.get("home", ""))) / 2
+        direct = (side(fixture.away_code or "", g.get("away", "")) +
+                  side(fixture.home_code or "", g.get("home", ""))) / 2
         # Kalshi is away-then-home, but tolerate a feed that disagrees.
-        swapped = (_score_match(fixture.away_code or "", g.get("home", "")) +
-                   _score_match(fixture.home_code or "", g.get("away", ""))) / 2
+        swapped = (side(fixture.away_code or "", g.get("home", "")) +
+                   side(fixture.home_code or "", g.get("away", ""))) / 2
         score = max(direct, swapped)
         if score > best_score:
             best, best_score = g, score
@@ -288,6 +310,49 @@ def match_event_to_game(fixture: Fixture, games: list[dict],
         home=best.get("home", ""), away=best.get("away", ""),
         confidence=round(best_score, 3), method="date+name",
     )
+
+
+def team_names(client: KalshiClient, event_ticker: str) -> dict[str, str]:
+    """Team code to the club name Kalshi prints for it, from the event itself.
+
+    Every market under a fixture event is one outcome, and its subtitle is the
+    name of that outcome — "Liverpool" for the ``-LFC`` market. That is the
+    league's own dictionary, published alongside the codes, and it does not need
+    maintaining as clubs are promoted and relegated.
+    """
+    try:
+        markets = client.get("/markets", {"event_ticker": event_ticker,
+                                          "limit": 100}).get("markets", [])
+    except Exception:
+        return {}
+    return names_from_markets(markets)
+
+
+_NOT_A_CLUB = ("tie", "draw", "both teams to score", "no goal", "yes", "no")
+
+
+def names_from_markets(markets) -> dict[str, str]:
+    """Build code to club name from markets already in hand.
+
+    Only the match-winner markets carry a club as their outcome; totals,
+    corners and both-teams-to-score name a threshold instead. Those are
+    filtered out rather than special-cased per league, so a competition whose
+    market types differ still yields whatever names it does publish.
+    """
+    out: dict[str, str] = {}
+    for m in markets:
+        # The REST field is yes_sub_title; `subtitle` is the name Discovery
+        # gives it after mapping, and only exists on its own MarketRef.
+        ticker = m.get("ticker", "") if isinstance(m, dict) else getattr(m, "ticker", "")
+        subtitle = ((m.get("yes_sub_title") or m.get("subtitle") or "")
+                    if isinstance(m, dict) else (getattr(m, "subtitle", "") or "")).strip()
+        code = ticker.rsplit("-", 1)[-1] if "-" in ticker else ""
+        if not code or not subtitle or any(ch.isdigit() for ch in subtitle):
+            continue
+        if subtitle.lower() in _NOT_A_CLUB:
+            continue
+        out.setdefault(code, subtitle)
+    return out
 
 
 def link_series(client: KalshiClient, series_ticker: str, league: str,

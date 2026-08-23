@@ -33,7 +33,7 @@ from ..discovery import Discovery
 from ..fees import breakeven, edge, kelly, taker_fee
 from ..history import HOUR, MINUTE, History
 from ..implied import american_to_prob, devig
-from ..linking import link_event
+from ..linking import link_event, names_from_markets
 from ..quotes import Quotes
 from ..timeline import Timeline
 
@@ -235,14 +235,23 @@ async def live_markets(league: str, limit: int = 20) -> dict:
         # Walk the league's fixture markets and keep those whose event links to
         # a live game. link_event is one call per event, so the sweep is bounded
         # by the number of distinct live events rather than the whole league.
+        # One pass to learn what each team code is called, from the markets
+        # already fetched. Codes are not always abbreviations of the feed's
+        # name — Liverpool trades as LFC — and without the league's own labels
+        # a real fixture scores too low to link and the match is missed
+        # entirely.
+        refs = list(_discovery.whats_bettable(league=league, fixtures_only=True))
+        names = names_from_markets(refs)
+
         seen_events: dict[str, str | None] = {}
-        for m in _discovery.whats_bettable(league=league, fixtures_only=True):
+        for m in refs:
             if len(by_game) and all(len(g["markets"]) >= limit for g in by_game.values()):
                 break
             event = m.event_ticker
             if event not in seen_events:
                 link = link_event(_client, event, league,
-                                  lambda lg, day: gs.todays_games(lg, day))
+                                  lambda lg, day: gs.todays_games(lg, day),
+                                  names=names)
                 seen_events[event] = link.game_id if link else None
             gid = seen_events[event]
             if gid in by_game and len(by_game[gid]["markets"]) < limit:
