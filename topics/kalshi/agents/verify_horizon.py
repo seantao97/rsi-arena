@@ -290,35 +290,38 @@ horizon closed — which flatters any forecast that said FLAT.
 
 def _filled(history: History, ticker: str, placed: datetime, due: datetime,
             action: str, entry: float) -> bool:
-    """Did the market come to a resting order during the window?
+    """Did anyone actually trade against a resting order during the window?
 
-    A buy sitting at 0.29 fills when someone sells into it, which shows up as
-    the book trading down to 0.29 or below. The candlestick low over the window
-    answers that; nothing else here is honest, because a quote the market never
-    reached is not a position.
+    A fill needs a counterparty. Someone has to sell into a resting bid, and
+    that leaves a print at or below its price — so what settles the question is
+    the traded range, not the quoted one.
 
-    Optimistic in one respect and deliberately so: touching a price is treated
-    as filling there, when in reality a queue may not clear. That errs toward
-    counting fills, which errs against the agent — an unfilled quote can only
-    ever have been free.
+    This started out reading the quoted range and was wrong in a way that
+    flattered the agent badly. On a thin book the best bid collapses whenever
+    the makers pull, with nothing traded at all: one live window showed
+    ``bid[0.08..0.18]`` against ``volume 0`` while every actual print that
+    period was 0.23 or higher. A resting buy at 0.095 was scored as filled
+    there, and since the contract later recovered it booked +$339 — enough on
+    its own to turn the run's pnl from -$156 to +$184. Nobody had sold to it.
+    An order resting at the collapsed bid *is* the best bid; being alone at the
+    top of the book is the opposite of being filled.
 
-    Measured on the first eleven resting quotes this produced, the optimism did
-    not matter: every one traded strictly *through* its price, by two to
-    twenty-one cents rather than by a tick. The books wide enough to rest a
-    quote inside are wide because they are thin, and a thin book moves further
-    in five minutes than the distance to any quote sitting in it. A hundred per
-    cent fill rate there is the market, not the model.
+    Still optimistic in one respect, deliberately: any print through the price
+    counts, when a real queue might have absorbed the whole trade ahead of us.
+    That errs toward counting fills, which errs against the agent.
     """
     candles = history.candles(ticker, placed, due, MINUTE)
     if not candles:
         return False
     if action == "MAKE_YES":
-        lows = [c.yes_bid_low for c in candles if c.yes_bid_low is not None]
+        lows = [c.price_low for c in candles
+                if c.price_low is not None and c.volume]
         return bool(lows) and min(lows) <= entry + 1e-9
-    # A resting sell is quoted on the yes side at 1 - entry; it fills when the
-    # book trades up through that price.
+    # A resting sell is quoted on the yes side at 1 - entry; it fills when
+    # someone buys through that price.
     target = 1 - entry
-    highs = [c.yes_ask_high for c in candles if c.yes_ask_high is not None]
+    highs = [c.price_high for c in candles
+             if c.price_high is not None and c.volume]
     return bool(highs) and max(highs) >= target - 1e-9
 
 
