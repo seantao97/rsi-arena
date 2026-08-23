@@ -415,7 +415,8 @@ def plot(report: Report, out_dir: str | Path = "~/.kalshi-agent/plots",
 def main() -> int:
     import argparse
     ap = argparse.ArgumentParser(description="Score recorded forecasts against outcomes")
-    ap.add_argument("--feed", default="~/.kalshi-agent/forecasts.jsonl")
+    ap.add_argument("--feed", default="~/.kalshi-agent/forecasts.jsonl",
+                    help="one feed, or several comma-separated to pool them")
     ap.add_argument("--plots", action="store_true")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--bankroll", type=float, default=50_000.0)
@@ -428,7 +429,12 @@ def main() -> int:
 
     if args.mode == "horizon":
         from . import verify_horizon
-        h = verify_horizon.load(args.feed)
+        feeds = [x.strip() for x in args.feed.split(",") if x.strip()]
+        # One evening is not enough to tell a real number from a lucky one, so
+        # pooling is a first-class option rather than something to reconstruct
+        # by hand afterwards.
+        h = (verify_horizon.load_many(feeds) if len(feeds) > 1
+             else verify_horizon.load(feeds[0]))
         if args.json:
             print(json.dumps({"windows": h.n, "contracts": h.contracts,
                               "mae": round(h.mae, 4),
@@ -442,6 +448,14 @@ def main() -> int:
                               "unresolved": h.unresolved}, indent=2))
         else:
             print(h.summary())
+            if len(feeds) > 1:
+                rows = h.by_run()
+                print(f"\n  {'run':18}{'windows':>8}{'contracts':>11}"
+                      f"{'skill':>8}{'echoed':>8}{'filled':>8}{'pnl':>11}")
+                for r in rows:
+                    print(f"  {r['run']:18}{r['windows']:>8}{r['contracts']:>11}"
+                          f"{r['skill']:>+7.1%}{r['echoed']:>8}{r['filled']:>8}"
+                          f"{r['pnl']:>+11.2f}")
         if args.plots:
             # Alongside the feed, not in a fixed directory — two runs on
             # different state dirs would otherwise overwrite each other's plots.

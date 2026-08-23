@@ -42,6 +42,7 @@ class Window:
     stake_usd: float
     interval: list | None = None
     staleness_s: float = 0.0
+    source: str = ""               # which feed this came from
     filled: bool = True            # resting orders only fill if price came to them       # how far before the target the price is from
 
     @property
@@ -216,6 +217,30 @@ class HorizonReport:
     def games(self) -> int:
         return len({w.ticker.rsplit("-", 1)[0] for w in self.windows})
 
+    def by_run(self) -> list[dict]:
+        """One row per source feed, for seeing whether the pooled number is
+        made of agreeing runs or of one run dominating."""
+        groups: dict[str, list[Window]] = {}
+        for w in self.windows:
+            groups.setdefault(w.source, []).append(w)
+        rows = []
+        for name, ws in groups.items():
+            mae = sum(x.error for x in ws) / len(ws)
+            naive = sum(x.naive_error for x in ws) / len(ws)
+            taken = [x for x in ws if x.action != "PASS" and (x.filled
+                                                             or not x.resting)]
+            rows.append({
+                "run": name, "windows": len(ws),
+                "contracts": len({x.ticker for x in ws}),
+                "skill": 1 - mae / naive if naive else 0.0,
+                "echoed": sum(1 for x in ws if x.echoes_market),
+                "quoted": sum(1 for x in ws if x.action != "PASS"),
+                "filled": len(taken),
+                "pnl": sum(x.pnl for x in taken),
+                "staked": sum(x.stake_usd for x in taken),
+            })
+        return sorted(rows, key=lambda r: -r["windows"])
+
     def summary(self) -> str:
         if not self.n:
             return (f"no scored windows ({self.unresolved} still open, "
@@ -325,6 +350,29 @@ def _filled(history: History, ticker: str, placed: datetime, due: datetime,
     return bool(highs) and max(highs) >= target - 1e-9
 
 
+def load_many(paths, history: History | None = None) -> HorizonReport:
+    """Score several runs as one body of evidence.
+
+    A single run covers one evening and a handful of contracts, which is not
+    enough to separate a real number from a lucky one — every run so far has
+    swung tens of percent before settling. Pooling them is how the baseline
+    stops being anecdote: same scoring, same guards, one report.
+
+    Runs are kept distinct where it matters. Contract and game counts are taken
+    over the union, so ten windows on one fixture in four separate runs are
+    still one fixture.
+    """
+    history = history or History()
+    pooled = HorizonReport()
+    for path in paths:
+        part = load(path, history)
+        pooled.windows.extend(part.windows)
+        pooled.unresolved += part.unresolved
+        pooled.skipped += part.skipped
+        pooled.stale += part.stale
+    return pooled
+
+
 def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
          history: History | None = None) -> HorizonReport:
     """Read horizon forecasts and look up what the price actually did."""
@@ -386,6 +434,7 @@ def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
             stake_usd=row.get("stake_usd") or 0.0,
             interval=row.get("interval"),
             staleness_s=staleness,
+            source=file.parent.name,
         ))
     return report
 
