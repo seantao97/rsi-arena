@@ -76,7 +76,8 @@ class Supervisor:
                  budget_usd: float = 10.0, per_run_usd: float = 0.30,
                  state_dir: str = "~/.kalshi-agent", mode: str = "inplay",
                  discover: bool = False, max_contracts: int = 4,
-                 rescan_s: float = 300.0, max_failures: int = 6) -> None:
+                 rescan_s: float = 300.0, max_failures: int = 6,
+                 max_per_game: int = 3) -> None:
         self.leagues = ([league] if isinstance(league, str)
                         else [x for x in league if x])
         self.league = self.leagues[0]      # positions without one fall back here
@@ -86,6 +87,7 @@ class Supervisor:
         self.max_contracts = max_contracts
         self.rescan_s = rescan_s
         self.max_failures = max_failures
+        self.max_per_game = max(1, max_per_game)
         self.poll_s = poll_s
         self.price_step = price_step
         self.budget_usd = budget_usd
@@ -241,6 +243,17 @@ class Supervisor:
                             if depth < len(bucket):
                                 order.append((lg, bucket[depth]))
 
+                    # How many slots each fixture already holds, so a match
+                    # that is under way cannot keep the ones a later kickoff
+                    # will need. Twelve contracts on one game are twelve
+                    # correlated observations; the scoring counts distinct
+                    # contracts for exactly this reason.
+                    per_game: dict[str, int] = {}
+                    for ticker, position in self.positions.items():
+                        if not position.settled:
+                            key = fixture_key(ticker)
+                            per_game[key] = per_game.get(key, 0) + 1
+
                     added = 0
                     for depth in range(max((len(g) for _, g in order), default=0)):
                         for lg, ranked in order:
@@ -249,6 +262,10 @@ class Supervisor:
                             if depth >= len(ranked):
                                 continue
                             market = ranked[depth]
+                            match = fixture_key(market["ticker"])
+                            if per_game.get(match, 0) >= self.max_per_game:
+                                continue
+                            per_game[match] = per_game.get(match, 0) + 1
                             self.add(market["ticker"], league=lg)
                             self._workers[market["ticker"]] = asyncio.create_task(
                                 self._own(market["ticker"]))
@@ -308,6 +325,7 @@ class Supervisor:
     async def _tick(self, pos: Position) -> None:
         from . import __main__ as cli
         from ..history import History
+from ..linking import fixture_key
 
         # Settlement is checked before linking, and deliberately so. A settled
         # market needs no fixture, and its game has usually rolled off the feed
@@ -600,6 +618,9 @@ async def main() -> int:
     ap.add_argument("--mode", default="inplay", choices=["inplay", "horizon"])
     ap.add_argument("--rescan", type=float, default=300.0)
     ap.add_argument("--max-contracts", type=int, default=4)
+    ap.add_argument("--max-per-game", type=int, default=3,
+                    help="cap slots one fixture may hold, so a match already "
+                         "under way leaves room for later kickoffs")
     ap.add_argument("--agent", default="inplay", choices=list(AGENTS))
     ap.add_argument("--poll", type=float, default=45.0)
     ap.add_argument("--price-step", type=float, default=0.03)
@@ -612,7 +633,8 @@ async def main() -> int:
     sup = Supervisor(leagues, args.agent, args.poll, args.price_step,
                      args.budget, args.per_run, args.state_dir,
                      mode=args.mode, discover=args.discover,
-                     max_contracts=args.max_contracts, rescan_s=args.rescan)
+                     max_contracts=args.max_contracts, rescan_s=args.rescan,
+                     max_per_game=args.max_per_game)
 
     for ticker in [t.strip() for t in args.contracts.split(",") if t.strip()]:
         sup.add(ticker)

@@ -23,6 +23,7 @@ from pathlib import Path
 
 from ..fees import maker_fee, taker_fee
 from ..history import MINUTE, History
+from ..linking import fixture_key
 
 
 @dataclass
@@ -233,7 +234,13 @@ class HorizonReport:
 
     @property
     def games(self) -> int:
-        return len({w.ticker.rsplit("-", 1)[0] for w in self.windows})
+        """Distinct matches, not distinct kinds of bet on them.
+
+        One fixture is listed under a series per market type — winner, spread,
+        first half, corners — so counting event tickers reported five games
+        where there was one, and overstated how much independent evidence a run
+        had by the same factor."""
+        return len({fixture_key(w.ticker) for w in self.windows})
 
     def by_run(self) -> list[dict]:
         """One row per source feed, for seeing whether the pooled number is
