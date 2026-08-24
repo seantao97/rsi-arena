@@ -316,6 +316,29 @@ def match_event_to_game(fixture: Fixture, games: list[dict],
     )
 
 
+def fixture_key(ticker: str) -> str:
+    """Which match a market belongs to, across every kind of bet on it.
+
+    Kalshi names a market ``SERIES-DATETEAMS-OUTCOME``, and the series says
+    what *kind* of bet it is. One fixture therefore appears under many series:
+    the winner, the spread, the first half, the corners. Keying on the event
+    ticker treats those as different games, which overstates how much
+    independent evidence a run collected and lets one match quietly take every
+    slot a supervisor has.
+
+    The middle segment is the fixture — a date and two team codes — and is the
+    same across all of them.
+
+        KXSERIEAGAME-26AUG24BFCLAZ-BFC    -> 26AUG24BFCLAZ
+        KXSERIEA1HSPREAD-26AUG24BFCLAZ-LAZ2 -> 26AUG24BFCLAZ
+    """
+    parts = ticker.split("-")
+    if len(parts) < 3:
+        # Not a fixture market. Its own event is the best key available.
+        return ticker.rsplit("-", 1)[0]
+    return "-".join(parts[1:-1])
+
+
 def team_names(client: KalshiClient, event_ticker: str) -> dict[str, str]:
     """Team code to the club name Kalshi prints for it, from the event itself.
 
