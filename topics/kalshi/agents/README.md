@@ -39,10 +39,18 @@ back to 0.105" while the market was at 0.295, and the further off the reading
 the larger the fake edge, so the fee threshold selected for exactly those. With
 a change, the anchor cannot be wrong and doing nothing costs a deliberate zero.
 
-`horizon.decide()` then compares that quote to the live book. It takes when
-taking clears the fee, and otherwise rests an order inside the spread — Kalshi's
-maker fee is about a quarter of taker, and a resting order crosses no spread.
-Nothing that arithmetic can settle is left to the model.
+`horizon.decide()` then compares that quote to the live book, and prices the
+**round trip**: buying yes costs the ask plus a fee, and getting out means
+selling at the *bid* later and paying another. The mid is not a price anyone
+trades at, so an edge measured to it is short by half a spread on each leg.
+Where taking does not clear, it rests an order inside the spread instead —
+Kalshi's maker fee is about a quarter of taker.
+
+**Getting out is a decision too.** Nothing is marked out on a timer. Each tick,
+if something is open the only question is whether to close it; if nothing is,
+whether to open. A position the agent never closes is carried to settlement and
+pays a dollar or nothing — the honest treatment, and the one that has so far
+made the money.
 
 ## Running it
 
@@ -79,8 +87,8 @@ nothing. Absolute error alone flatters a quiet market.
 | `direction_accuracy` | only on windows that moved ≥1¢, only on non-flat calls |
 | `coverage` | how often the realised price landed inside the stated quote |
 | `echoed the market` | how often it predicted the current mid *exactly* |
-| `quoted` / `filled` / `traded` | orders placed, orders hit, positions taken |
-| `pnl` / `roi` | entered at the order's price, marked out at the realised mid |
+| `opened` / `closed` / settled | positions taken, ended by decision, carried to the end |
+| `pnl` / `roi` | booked on a close or a settlement; nothing is marked out on a timer |
 
 Three guards decide what counts as a scored window, all of them learned from
 being wrong:
@@ -96,37 +104,55 @@ A **fill needs a print**, not a quote. On a thin book the best bid collapses
 whenever the makers pull, with nothing traded: one window showed
 `bid[0.08..0.18]` against volume 0 while every print was 0.23 or higher. Scoring
 that as a fill booked a phantom +$339 and turned a losing run into a winning
-one. Fills are read from traded prices on candles with volume.
+one. Fills are read from traded prices on candles with volume, over the window
+the order actually stood — and checked that way, a resting order here often does
+not fill at all.
+
+**Contracts are counted per match, not per market type.** One fixture is listed
+under a series for each kind of bet — winner, spread, first half, corners — so
+keying on the event ticker reported five games where there was one, and let a
+single match take every slot the supervisor had.
 
 Reports count **distinct contracts** and say so when the number is small. Fifty
 windows on one match are fifty correlated observations of one game.
 
 ## What it currently does
 
-Measured live over 132 windows on six contracts, Newcastle vs Liverpool:
+Two evenings, 1,600-odd scored windows across two dozen matches, under the
+pricing described above:
 
 ```
-price error       0.0334   (no-change 0.0334)
-skill             +0.1%    indistinguishable from it
-direction         57.9% of 19 calls
-coverage          71.2%
-echoed the market 105/132
-quoted 27 -> 13 filled (48%) -> -$407 (-8.07%), win rate 30.8%
+skill              about zero, run to run between -5% and +1%
+echoed the market  70-80% of forecasts are the current mid, repeated
 ```
 
-The error matches the benchmark to four decimals because **80% of forecasts are
-the current mid, repeated**. This is not a bad predictor so much as one that
-declines to have a view — and on the minority of occasions it does have one, it
-loses money.
+The error matches the no-change benchmark to three or four decimals, and it does
+so because most forecasts *are* the benchmark. This is not a bad predictor so
+much as one that declines to have a view.
 
-That is the starting position, and each part of it is separately measurable:
+Trading is rarer and more interesting than that summary suggests. Once the round
+trip is priced properly, the arithmetic almost never clears: on one full evening,
+**211 decisions produced a best edge of 0.0000 and not one positive**. That is
+not a fault. This harness predicts moves of two to three cents and a round trip
+costs two to three cents, so on a quiet one-cent book there is nothing there —
+and 72% of the books it sees are a cent or two wide.
 
-1. **skill ≈ 0** — the headline number, and the easiest to move.
-2. **80% echoing** — structural. The model will not disagree with the market.
-3. **Quoting loses** — not "trades too little". Resting a quote is only possible
-   where the spread is wide, and spreads are wide because those books are thin
-   and hard to price. Participation went from 1.4% to 11% by allowing maker
-   orders, and every added trade landed in the contracts it understands worst.
+It does act when the move dwarfs the cost, and the two cases it has found are
+worth naming:
+
+- **Time decay.** A 0-0 match approaching full time drags the draw contract
+  toward 1.00. Bought at 0.80 with five minutes left, carried to settlement.
+- **A goal that overshoots.** A spread contract fell 0.73 to 0.33 in four
+  minutes on a Chelsea goal; the agent called it an overreaction, bought the
+  other side at 0.72 on a ten-cent spread, and Fulham pulled one back.
+
+Both settled in full. The one position it *closed* by decision netted exactly
+$0.00 — bought at 0.80, sold at 0.82, and the two cents paid for the round trip
+to the penny. It then watched the same contract run to 0.99 and bought back in
+higher.
+
+That is the shape of the target. Not "trade more": **predict a move large enough
+to pay for itself**, and stop selling the winners.
 
 ## Layout
 
@@ -137,6 +163,7 @@ That is the starting position, and each part of it is separately measurable:
 | `tools.py` | 19 async tools over `topics/kalshi/` |
 | `supervisor.py` | discovery, polling, budget, durable state |
 | `validation.py` | refuses to act on output that disagrees with itself |
+| `bench/` | the same windows of a finished match, for comparing two harnesses |
 | `verify.py` | settlement scoring — Brier, calibration, paper pnl |
 | `verify_horizon.py` | five-minute scoring — skill, fills, coverage, pnl |
 | `__main__.py` | single-shot and `--watch` runs |
