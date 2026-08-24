@@ -134,6 +134,7 @@ class HorizonReport:
     unresolved: int = 0
     skipped: int = 0
     stale: int = 0
+    settlements: list[dict] = field(default_factory=list)
 
     @property
     def n(self) -> int:
@@ -203,21 +204,37 @@ class HorizonReport:
 
     @property
     def realised_pnl(self) -> float:
-        return sum(w.realised_pnl for w in self.windows)
+        """Everything booked: closes the agent decided on, and positions it
+        carried to settlement."""
+        return (sum(w.realised_pnl for w in self.windows)
+                + sum(s.get("realised_pnl") or 0.0 for s in self.settlements))
 
     @property
-    def settled_open(self) -> list[Window]:
+    def settled_open(self) -> list[dict]:
         """Positions carried all the way to settlement, having never been
-        closed. The expensive ones, usually."""
-        return [w for w in self.windows if w.action == "SETTLE"]
+        closed."""
+        return self.settlements
 
     @property
     def pnl(self) -> float:
-        return sum(w.pnl for w in self.taken)
+        """Everything the agent booked — closes it decided on, and positions it
+        carried to settlement. Summing over closed *windows* alone left out the
+        settlements, which is where most of the money now ends up."""
+        return self.realised_pnl
+
+    @property
+    def settled_pnl(self) -> float:
+        return sum(s.get("realised_pnl") or 0.0 for s in self.settlements)
 
     @property
     def staked(self) -> float:
-        return sum(w.stake_usd for w in self.taken)
+        """What was put at risk, from the rows that opened a position.
+
+        A close carries no stake — the money went in on the way in. Summing
+        over closes gave a denominator from the wrong rows and produced a
+        return of -228% on a real run, which is not a possible number and was
+        the tell."""
+        return sum(w.stake_usd for w in self.opened)
 
     @property
     def roi(self) -> float:
@@ -287,19 +304,21 @@ class HorizonReport:
             f"  echoed the market  {self.echoed}/{self.n} windows predicted the "
             f"current mid exactly",
         ]
-        if self.quoted:
+        if self.quoted or self.settlements:
             lines += [
                 "",
                 f"  opened            {len(self.opened)} positions, "
-                f"{len(self.closed)} closed "
-                f"({len(self.settled_open)} of them at settlement)",
+                f"{len(self.closed)} closed by decision, "
+                f"{len(self.settled_open)} carried to settlement",
                 f"  quoted            {len(self.quoted)} of {self.n} windows"
                 + (f", {len([w for w in self.windows if w.resting])} resting "
                    f"({self.fill_rate:.0%} filled)"
                    if any(w.resting for w in self.windows) else ""),
                 f"  traded            {len(self.taken)}",
                 f"  pnl               ${self.pnl:+,.2f} realised on "
-                f"${self.staked:,.0f} staked ({self.roi:+.2%})",
+                f"${self.staked:,.0f} staked ({self.roi:+.2%})"
+                + (f"   of which ${self.settled_pnl:+,.2f} at settlement"
+                   if self.settlements else ""),
                 f"  win rate          {self.win_rate:.1%}",
             ]
         else:
@@ -420,6 +439,16 @@ def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
             continue
         if row.get("mode") != "horizon" or row.get("error"):
             continue
+
+        # A settlement is money, not a forecast. It carries no prediction and
+        # no horizon, so the window filter below drops it — and since settling
+        # is now the default way a position ends, the report was leaving out
+        # most of what the agent actually earned. One live run booked $54.78
+        # and reported zero.
+        if row.get("action") == "SETTLE":
+            report.settlements.append(row)
+            continue
+
         predicted, mid_now = row.get("predicted_mid"), row.get("mid_now")
         target = row.get("target_ts")
         if not all(isinstance(v, (int, float)) for v in (predicted, mid_now)) \
