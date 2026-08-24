@@ -36,7 +36,7 @@ import json
 import signal
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .agents import AGENTS, default_config
@@ -61,6 +61,7 @@ class Position:
     result: str | None = None
     last_fingerprint: tuple | None = None
     last_record: dict | None = None
+    resting: dict | None = None            # an order posted, not yet filled
     holding: dict | None = None            # an open position, or nothing
     realised_pnl: float = 0.0              # closed round trips only
     trades: int = 0
@@ -426,6 +427,39 @@ class Supervisor:
         # The anchor is the exchange's mid, never the model's reading of it.
         delta = out.get("delta_cents")
         width = out.get("half_width_cents")
+        # Settle any order posted last tick before deciding anything new: it
+        # either got hit, or it did not and is pulled. A five-minute view does
+        # not justify leaving a quote out indefinitely.
+        if pos.resting:
+            order = pos.resting
+            filled = await asyncio.to_thread(
+                self._resting_filled, pos.ticker, order)
+            try:
+                placed_at = datetime.fromisoformat(order["placed_at"])
+            except (KeyError, ValueError):
+                placed_at = datetime.now(timezone.utc)
+            from .horizon import HORIZON_MINUTES
+            expired = (datetime.now(timezone.utc) - placed_at
+                       >= timedelta(minutes=HORIZON_MINUTES))
+            if not filled and not expired:
+                # Still standing. The view behind it has not run out yet.
+                return {"ts": _now(), "mode": "horizon", "ticker": pos.ticker,
+                        "action": "RESTING", "resting": order,
+                        "realised_pnl": 0.0, "cost_usd": 0.0, "error": None}
+            pos.resting = None
+            if filled:
+                fee = maker_fee(order["price"]) * order["contracts"]
+                pos.holding = Holding(side=order["side"], price=order["price"],
+                                      contracts=order["contracts"],
+                                      fee_paid=round(fee, 4),
+                                      opened_at=order["placed_at"]).to_dict()
+                pos.trades += 1
+                self._log("filled", ticker=pos.ticker, side=order["side"],
+                          price=round(order["price"], 3))
+            else:
+                self._log("unfilled", ticker=pos.ticker, side=order["side"],
+                          price=round(order["price"], 3))
+
         held = Holding.from_dict(pos.holding)
         predicted = interval = decision = None
         if isinstance(delta, (int, float)) and quote.mid is not None:
@@ -445,13 +479,24 @@ class Supervisor:
             side = "YES" if decision.action == "OPEN_YES" else "NO"
             contracts = (decision.size_usd / decision.entry_price
                          if decision.entry_price else 0.0)
-            fee = (maker_fee if decision.resting else taker_fee)(
-                decision.entry_price) * contracts
-            pos.holding = Holding(side=side, price=decision.entry_price,
-                                  contracts=round(contracts, 2),
-                                  fee_paid=round(fee, 4),
-                                  opened_at=_now()).to_dict()
-            pos.trades += 1
+            if decision.resting:
+                # A posted order is not a position. It becomes one only if the
+                # market comes to it, which the next tick checks against the
+                # prints. Booking it on placement would credit the agent with
+                # every quote it ever wrote, most of which nobody takes.
+                pos.resting = {"side": side, "price": decision.entry_price,
+                               "contracts": round(contracts, 2),
+                               "placed_at": _now()}
+                self._log("posted", ticker=pos.ticker, side=side,
+                          price=round(decision.entry_price, 3),
+                          contracts=round(contracts, 2))
+            else:
+                fee = taker_fee(decision.entry_price) * contracts
+                pos.holding = Holding(side=side, price=decision.entry_price,
+                                      contracts=round(contracts, 2),
+                                      fee_paid=round(fee, 4),
+                                      opened_at=_now()).to_dict()
+                pos.trades += 1
         elif decision and decision.action == "CLOSE" and held is not None:
             proceeds = decision.entry_price          # already net of exit fee
             realised = round(held.contracts * proceeds
@@ -474,6 +519,7 @@ class Supervisor:
                 "entry_price": decision.entry_price if decision else 0.0,
                 "stake_usd": decision.size_usd if decision else 0.0,
                 "resting": bool(decision.resting) if decision else False,
+                "resting": pos.resting,
                 "holding": pos.holding,
                 "realised_pnl": realised,
                 "reason": decision.reason if decision else "",
@@ -491,6 +537,39 @@ class Supervisor:
             self._log("validation", ticker=pos.ticker, ok=check.ok,
                       issues=check.errors + check.warnings)
         return entry
+
+    def _resting_filled(self, ticker: str, order: dict) -> bool:
+        """Did anyone trade through a posted order while it was out there?
+
+        A fill needs a counterparty. Someone has to sell into a resting bid, and
+        that leaves a print at or below its price — so the traded range settles
+        it, not the quoted one. On a thin book the best bid collapses whenever
+        the makers pull, with nothing traded at all, and an order sitting at
+        that collapsed bid *is* the best bid: alone at the top of the book is
+        the opposite of filled.
+        """
+        from datetime import datetime
+
+        from ..history import MINUTE, History
+        try:
+            placed = datetime.fromisoformat(order["placed_at"])
+        except (KeyError, ValueError):
+            return False
+        from .horizon import HORIZON_MINUTES
+        expired = min(placed + timedelta(minutes=HORIZON_MINUTES),
+                      datetime.now(timezone.utc))
+        if expired <= placed:
+            return False
+        candles = History().candles(ticker, placed, expired, MINUTE)
+        traded = [c for c in candles if c.volume]
+        if not traded:
+            return False
+        if order["side"] == "YES":
+            lows = [c.price_low for c in traded if c.price_low is not None]
+            return bool(lows) and min(lows) <= order["price"] + 1e-9
+        target = 1 - order["price"]
+        highs = [c.price_high for c in traded if c.price_high is not None]
+        return bool(highs) and max(highs) >= target - 1e-9
 
     async def _sleep(self, seconds: float) -> None:
         with contextlib.suppress(asyncio.TimeoutError):
