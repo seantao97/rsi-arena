@@ -39,6 +39,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from ..linking import fixture_key
 from .agents import AGENTS, default_config
 from .tools import kalshi_tools
 
@@ -325,7 +326,6 @@ class Supervisor:
     async def _tick(self, pos: Position) -> None:
         from . import __main__ as cli
         from ..history import History
-from ..linking import fixture_key
 
         # Settlement is checked before linking, and deliberately so. A settled
         # market needs no fixture, and its game has usually rolled off the feed
