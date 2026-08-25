@@ -265,6 +265,14 @@ class HorizonReport:
         groups: dict[str, list[Window]] = {}
         for w in self.windows:
             groups.setdefault(w.source, []).append(w)
+        # Settlements are money without a forecast attached, so they live apart
+        # from the windows — and a per-run breakdown that ignores them reports
+        # zero for a run that made $375.
+        settled: dict[str, float] = {}
+        for record in self.settlements:
+            settled[record.get("source", "")] = (
+                settled.get(record.get("source", ""), 0.0)
+                + (record.get("realised_pnl") or 0.0))
         rows = []
         for name, ws in groups.items():
             mae = sum(x.error for x in ws) / len(ws)
@@ -278,7 +286,7 @@ class HorizonReport:
                 "echoed": sum(1 for x in ws if x.echoes_market),
                 "quoted": sum(1 for x in ws if x.action != "PASS"),
                 "filled": len(taken),
-                "pnl": sum(x.pnl for x in taken),
+                "pnl": sum(x.pnl for x in taken) + settled.get(name, 0.0),
                 "staked": sum(x.stake_usd for x in taken),
             })
         return sorted(rows, key=lambda r: -r["windows"])
@@ -414,6 +422,7 @@ def load_many(paths, history: History | None = None) -> HorizonReport:
     for path in paths:
         part = load(path, history)
         pooled.windows.extend(part.windows)
+        pooled.settlements.extend(part.settlements)
         pooled.unresolved += part.unresolved
         pooled.skipped += part.skipped
         pooled.stale += part.stale
@@ -446,7 +455,8 @@ def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
         # most of what the agent actually earned. One live run booked $54.78
         # and reported zero.
         if row.get("action") == "SETTLE":
-            report.settlements.append(row)
+            # Tagged with its feed so a per-run breakdown can attribute it.
+            report.settlements.append({**row, "source": file.parent.name})
             continue
 
         predicted, mid_now = row.get("predicted_mid"), row.get("mid_now")
