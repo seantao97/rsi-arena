@@ -62,3 +62,52 @@ def test_a_holding_is_worth_its_side() -> None:
                    opened_at="t")
     assert held.value_at(0.24) == 0.76
     assert Holding("YES", 0.4, 10, 0.1, "t").value_at(0.24) == 0.24
+
+
+def test_a_second_division_is_not_the_top_flight() -> None:
+    """A bare digit after the stem marks a tier; a digit before H marks a half.
+
+    KXLALIGA2GAME is the Spanish second division. Reading it as La Liga swept
+    36 second-tier markets into the top flight, and the reserve side listed as
+    "Real Sociedad B" then claimed the RSO code.
+    """
+    from ..taxonomy import match_competition
+    assert match_competition("LALIGAGAME")[0] == "LALIGA"
+    assert match_competition("LALIGA1HTOTAL")[0] == "LALIGA"
+    assert match_competition("LALIGA2HSPREAD")[0] == "LALIGA"
+    assert match_competition("SERIEA1HSPREAD")[0] == "SERIEA"
+    for tier_two in ("LALIGA2GAME", "LALIGA2SPREAD", "LALIGA2TOTAL"):
+        assert match_competition(tier_two) is None, tier_two
+
+
+def test_the_shortest_name_wins_a_code() -> None:
+    """A club is named several ways across a league's series; the bare name is
+    the one the fixture feed prints."""
+    from ..linking import names_from_markets
+
+    class Ref:
+        def __init__(self, ticker, subtitle):
+            self.ticker, self.subtitle = ticker, subtitle
+
+    got = names_from_markets([
+        Ref("KXLALIGA2GAME-26AUG31BURRSO-RSO", "Real Sociedad B"),
+        Ref("KXLALIGAFTTS-26AUG29RSOESP-RSO", "Real Sociedad San Sebastian"),
+        Ref("KXLALIGAGAME-26SEP07ELCRSO-RSO", "Real Sociedad"),
+    ])
+    assert got["RSO"] == "Real Sociedad"
+
+
+def test_a_name_matches_itself() -> None:
+    """Every other rule reads the left side as an abbreviation.
+
+    Passing the club name the exchange publishes fell through to a character
+    sequence fallback and scored *lower* the longer the name: "Real Madrid"
+    against "Real Madrid" came out at 0.455, below the 0.6 linking threshold.
+    """
+    from ..linking import _score_match
+    assert _score_match("Real Madrid", "Real Madrid") == 1.0
+    assert _score_match("Real Sociedad", "Real Sociedad San Sebastian") >= 0.9
+    assert _score_match("Newcastle", "Newcastle United") >= 0.9
+    # And a code still beats a wrong name.
+    assert _score_match("RMA", "Real Madrid") > _score_match("Real Madrid",
+                                                             "Real Sociedad")

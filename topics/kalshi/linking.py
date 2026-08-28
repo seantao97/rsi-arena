@@ -246,7 +246,17 @@ def harvest_team_codes(client: KalshiClient, series_ticker: str,
 
 
 def _score_match(kalshi_code: str, feed_name: str) -> float:
-    """How well a Kalshi team code matches a feed team name. 0..1."""
+    """How well a Kalshi team code, or the club name Kalshi prints, matches a
+    feed team name. 0..1.
+
+    Every rule below reads the left side as an abbreviation, which is what it
+    was written for. Passing a full club name — which linking does, since the
+    exchange publishes one — fell through to the character-sequence fallback
+    and scored *lower* the longer the name was: "Real Madrid" against "Real
+    Madrid" came out at 0.455, worse than the bare code. Real Madrid against
+    Real Sociedad then missed the 0.6 threshold by a tenth and went unlinked
+    for a whole evening.
+    """
     if not kalshi_code or not feed_name:
         return 0.0
     code = kalshi_code.upper()
@@ -254,6 +264,16 @@ def _score_match(kalshi_code: str, feed_name: str) -> float:
     words = name.split()
     if not words:
         return 0.0
+
+    # The same club, said the same way.
+    clean_code = re.sub(r"[^A-Z ]", "", code).strip()
+    if clean_code and clean_code == name:
+        return 1.0
+    # One name containing the other: "Real Sociedad" inside "Real Sociedad San
+    # Sebastian", or a feed that appends "FC" where the exchange does not.
+    if " " in clean_code and (clean_code in name or name in clean_code):
+        return 0.9
+
     initials = "".join(w[0] for w in words)
     if code == initials:
         return 0.95
@@ -365,6 +385,15 @@ def names_from_markets(markets) -> dict[str, str]:
     corners and both-teams-to-score name a threshold instead. Those are
     filtered out rather than special-cased per league, so a competition whose
     market types differ still yields whatever names it does publish.
+
+    Where several markets claim a code, the **shortest** name wins. A club is
+    named more than one way across a league's series — Real Sociedad appears as
+    "Real Sociedad", "Real Sociedad San Sebastian", "Real Sociedad wins 2nd
+    Half" and, from a second-tier series swept in by mistake, "Real Sociedad
+    B". Taking whichever arrived first handed ``RSO`` to the reserve side, and
+    Real Madrid against Real Sociedad then scored too low to link and went
+    unwatched for an evening. The shortest is the bare club name, which is what
+    the fixture feed prints.
     """
     out: dict[str, str] = {}
     for m in markets:
@@ -378,7 +407,8 @@ def names_from_markets(markets) -> dict[str, str]:
             continue
         if subtitle.lower() in _NOT_A_CLUB:
             continue
-        out.setdefault(code, subtitle)
+        if code not in out or len(subtitle) < len(out[code]):
+            out[code] = subtitle
     return out
 
 

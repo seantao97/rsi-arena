@@ -135,10 +135,27 @@ _COMPETITION_ORDER = sorted(SOCCER_STEMS, key=len, reverse=True)
 
 
 def match_competition(stem: str) -> tuple[str, str] | None:
-    """Resolve a ticker stem to ``(league, espn_slug)`` by longest prefix."""
+    """Resolve a ticker stem to ``(league, espn_slug)`` by longest prefix.
+
+    A digit immediately after the stem means a different division, not another
+    market type on the same one: ``KXLALIGA2GAME`` is the Spanish second tier,
+    and reading it as La Liga swept 36 second-division markets into the top
+    flight's sweep. That was enough to break linking for the whole league —
+    the reserve side listed as "Real Sociedad B" claimed the ``RSO`` code, so
+    Real Madrid against Real Sociedad scored too low to link and was never
+    adopted, silently, for a whole evening.
+
+    A digit followed by ``H`` is a half, not a division — ``1HTOTAL`` and
+    ``2HSPREAD`` are ordinary market types on the same competition. It is the
+    bare digit that marks a tier: ``2GAME``, ``2SPREAD``, ``2TOTAL``.
+    """
     for key in _COMPETITION_ORDER:
-        if stem.startswith(key):
-            return SOCCER_STEMS[key]
+        if not stem.startswith(key):
+            continue
+        tail = stem[len(key):]
+        if tail[:1].isdigit() and tail[1:2] != "H":
+            continue
+        return SOCCER_STEMS[key]
     return None
 
 
