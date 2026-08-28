@@ -44,7 +44,6 @@ class Window:
     interval: list | None = None
     staleness_s: float = 0.0
     source: str = ""               # which feed this came from
-    half_spread: float = 0.0       # cost of crossing to get out
     realised_pnl: float = 0.0      # booked by the supervisor on a close
     filled: bool = True            # resting orders only fill if price came to them       # how far before the target the price is from
 
@@ -503,10 +502,6 @@ def load(path: str | Path = "~/.kalshi-agent/forecasts.jsonl",
             staleness_s=staleness,
             source=file.parent.name,
             realised_pnl=float(row.get("realised_pnl") or 0.0),
-            # Closing crosses half the spread. The book at entry is the best
-            # estimate available for what it will cost at exit.
-            half_spread=(max(0.0, (row.get("ask") or 0) - (row.get("bid") or 0))
-                         / 2),
         ))
     return report
 
