@@ -223,3 +223,156 @@ def test_soccer_has_no_play_by_play_and_says_so() -> None:
     assert out.ok
     if not out.raw_output.get("available"):
         assert "score" in out.raw_output
+
+
+# --- in-play edge cases: the stopped clock -----------------------------------
+#
+# A goal in the 90th minute is where the in-play tools break, and they broke
+# exactly once already: state_change read the stopped clock of a finished match
+# as freshness and announced "a goal went in 0 minutes ago" on a fixture that
+# had been over for a week. Nothing was absorbing anything. These pin the two
+# halves of that bug — a converted penalty is a goal, and a stopped clock is
+# not a recent event — plus the neighbouring cases in the same family.
+
+
+def _state(**over):
+    """A GameState with only the fields the in-play tools read."""
+    from .. import gamestate as gs
+
+    base = dict(game_id="1", league="EPL", status="in_progress",
+                home="Liverpool", away="Newcastle United",
+                home_score=2, away_score=2, period="2", clock="90'",
+                fetched_at="2026-08-23T16:00:00+00:00")
+    return gs.GameState(**{**base, **over})
+
+
+def _events(*pairs):
+    from ._events import MatchEvent
+
+    return [MatchEvent(seconds=minute * 60.0, kind=kind, team="Liverpool",
+                       text=f"{kind} at {minute}") for minute, kind in pairs]
+
+
+@pytest.fixture
+def feed(monkeypatch):
+    """Drive the in-play tools off a fixture instead of the network."""
+    from . import _events as ev
+    from . import minutes_since_goal as msg
+    from . import state_change as sc
+
+    def install(state, events):
+        read = state if callable(state) else (lambda: state)
+        for module in (sc, msg):
+            monkeypatch.setattr(module.gs, "game_state",
+                                lambda *a, **k: read(), raising=False)
+            monkeypatch.setattr(module, "key_events", lambda *a, **k: events)
+        monkeypatch.setattr(ev, "_SEEN", {})
+    return install
+
+
+def test_a_ninetieth_minute_penalty_is_a_goal(feed) -> None:
+    """ESPN files a converted penalty under its own type. Counting only "goal"
+    loses the most price-moving event in the match."""
+    feed(_state(), _events((4, "goal"), (90, "penalty---scored")))
+    out = call("state_change", league="EPL", game_id="1")
+    assert out.ok
+    assert out.raw_output["minutes_since_score"] == 0, out.response
+    assert "absorbing" in out.response
+
+
+def test_full_time_is_not_a_goal_a_minute_ago(feed) -> None:
+    """The regression. The clock still reads 90' after the whistle, so measuring
+    "minutes since" off it makes every settled match look like it just scored."""
+    feed(_state(status="final"), _events((4, "goal"), (90, "penalty---scored")))
+    out = call("state_change", league="EPL", game_id="1")
+    assert out.ok
+    assert out.raw_output["minutes_since_score"] is None
+    assert "full time" in out.response.lower()
+    assert "90'" in out.response          # the goal is still reported...
+    assert "absorbing" not in out.response  # ...but not as news.
+
+
+def test_the_goal_clock_stops_at_full_time_too(feed) -> None:
+    """minutes_since_goal reads the same clock and had the same hole."""
+    feed(_state(status="final"), _events((4, "goal"), (90, "penalty---scored")))
+    out = call("minutes_since_goal", league="EPL", game_id="1")
+    assert out.ok
+    assert out.raw_output["last_goal_minute"] == 90
+    assert out.raw_output["minutes_since"] is None
+    assert "full time" in out.response.lower()
+
+
+def test_stoppage_time_never_reads_as_a_future_goal(feed) -> None:
+    """A 90+4' goal against a clock the feed still reports as 90' would give a
+    negative age. Clamped, because "-4 minutes ago" is worse than "just now"."""
+    feed(_state(clock="90'"), _events((94, "goal")))
+    out = call("state_change", league="EPL", game_id="1")
+    assert out.raw_output["minutes_since_score"] == 0
+
+
+def test_a_goalless_match_says_so_rather_than_nothing(feed) -> None:
+    feed(_state(home_score=0, away_score=0, clock="70'"), _events((23, "yellow-card")))
+    out = call("minutes_since_goal", league="EPL", game_id="1")
+    assert out.ok
+    assert out.raw_output["last_goal_minute"] is None
+    assert "goalless" in out.response.lower()
+
+
+def test_no_event_times_is_a_coverage_fact_not_a_failure(feed) -> None:
+    """Competitions that publish no keyEvents must fall back, not error."""
+    feed(_state(), [])
+    out = call("state_change", league="EPL", game_id="1")
+    assert out.ok
+    assert out.raw_output["source"] == "first_look"
+    again = call("state_change", league="EPL", game_id="1")
+    assert again.raw_output["source"] == "baseline"
+    assert again.raw_output["score_changed"] is False
+
+
+def test_the_baseline_notices_a_late_goal(feed) -> None:
+    """The fallback path's whole job: two looks either side of a goal."""
+    scores = {"home": 1}
+    feed(lambda: _state(home_score=scores["home"], away_score=2), [])
+    call("state_change", league="EPL", game_id="1")
+    scores["home"] = 2                      # a goal, between the two looks
+    out = call("state_change", league="EPL", game_id="1")
+    assert out.raw_output["score_changed"] is True
+    assert "CHANGED" in out.response
+
+
+# --- in-play edge cases: prices around the same moment -----------------------
+
+
+def test_a_window_past_the_whistle_is_named_as_such() -> None:
+    """A wrong kick-off puts the whole window after full time, where every
+    reading is identical. That is a dead market, not a flat one, and reporting
+    a drift rate off it invents a trend."""
+    out = call("time_decay", ticker=SETTLED_TICKER,
+               kickoff="2026-08-23T14:00:00Z", minutes=90)
+    if not out.ok:
+        pytest.skip(out.error)
+    if out.raw_output.get("stalled"):
+        assert "stopped moving" in out.response
+
+
+def test_a_shock_reports_how_much_came_back() -> None:
+    """Chelsea's spread fell 38 cents in minutes on a goal. Whether it retraced
+    is the whole question — a jump that holds is information, one that snaps
+    back was a thin book."""
+    out = call("market_shock", ticker="KXEPLSPREAD-26AUG24FULCFC-CFC2",
+               minutes_back=40, ending="2026-08-24T20:20:00Z")
+    if not out.ok:
+        pytest.skip(out.error)
+    biggest = out.raw_output["shocks"][0]
+    assert abs(biggest["move_cents"]) >= 5
+    assert 0.0 <= biggest["retraced_fraction"] <= 1.0
+    assert "retraced" in out.response
+
+
+def test_a_market_with_no_bars_refuses_instead_of_raising() -> None:
+    """Every in-play tool is called on markets that may not have traded. A
+    refusal the agent can read beats an exception it cannot."""
+    out = call("market_shock", ticker="KXEPLGAME-01JAN00XXXYYY-XXX",
+               minutes_back=30)
+    assert not out.ok
+    assert out.response.startswith("unavailable:")

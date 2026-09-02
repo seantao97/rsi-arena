@@ -31,13 +31,17 @@ from .game_state import GameStateTool
 from .kalshi_vs_book import KalshiVsBookTool
 from .list_markets import ListMarketsTool
 from .live_markets import LiveMarketsTool
+from .live_snapshot import LiveSnapshotTool
 from .market_quote import MarketQuoteTool
 from .market_reaction import MarketReactionTool
 from .market_at_time import MarketAtTimeTool
 from .market_rules import MarketRulesTool
+from .market_shock import MarketShockTool
+from .minutes_since_goal import MinutesSinceGoalTool
 from .order_book import OrderBookTool
 from .previous_trades import PreviousTradesTool
 from .price_the_edge import PriceTheEdgeTool
+from .price_velocity import PriceVelocityTool
 from .recent_plays import RecentPlaysTool
 from .settlement import SettlementTool
 from .sportsbook_line import SportsbookLineTool
@@ -46,6 +50,7 @@ from .orderbook_imbalance import OrderbookImbalanceTool
 from .settlement_countdown import SettlementCountdownTool
 from .similar_situations import SimilarSituationsTool
 from .spread_ladder import SpreadLadderTool
+from .state_change import StateChangeTool
 from .team_news import TeamNewsTool
 from .time_decay import TimeDecayTool
 from .tradeable_spreads import TradeableSpreadsTool
@@ -63,10 +68,12 @@ REGISTRY: list[type[Tool]] = [
     MarketQuoteTool, OrderBookTool, CandlestickTool, CandlestickProbTool,
     PreviousTradesTool, VolumeProfileTool, MarketAtTimeTool, SettlementTool,
     OrderbookImbalanceTool, TimeDecayTool, SimilarSituationsTool,
-    SettlementCountdownTool,
+    SettlementCountdownTool, PriceVelocityTool, MarketShockTool,
     # what is happening in the game
     TodaysFixturesTool, GameStateTool, RecentPlaysTool, GameContextTool,
     SportsbookLineTool, FindGameForMarketTool,
+    # what just changed
+    StateChangeTool, MinutesSinceGoalTool, LiveSnapshotTool,
     # how the market responds
     MarketReactionTool, UnexplainedMovesTool,
     # what a trade costs, and whether it is worth making

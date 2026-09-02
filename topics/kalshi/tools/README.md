@@ -97,6 +97,20 @@ traceback.
 | `market_reaction` | how far this contract moved on each scoring play |
 | `unexplained_moves` | price moves with no play behind them |
 
+### What has just changed
+
+A scoreline says nothing about whether the price has absorbed it. A contract at
+1-0 is a different thing thirty seconds after the goal than half an hour after
+it, and these are the tools that tell the two apart.
+
+| tool | answers |
+| --- | --- |
+| `state_change` | what moved since the last look, and how long ago |
+| `minutes_since_goal` | how long the match has been quiet |
+| `price_velocity` | how fast this contract is moving against its own normal |
+| `market_shock` | jumps in the last half hour, and how much came back |
+| `live_snapshot` | book, tape, score and change in one call |
+
 ### What a trade costs
 
 | tool | answers |
@@ -163,6 +177,19 @@ a sentence the model can act on.
 
 `version` matters once harnesses are being rewritten. Bump it when the output
 shape changes, so a trace records which revision a harness was written against.
+
+## The stopped clock
+
+Every tool that measures "how long ago" reads a match clock, and a match clock
+stops. After the whistle it still reads 90', so an age measured off it makes a
+week-old fixture look like it just scored — `state_change` shipped that bug
+once. Anything new that subtracts from the clock owes a check on
+`status == "final"`, and a test in the in-play section beside the others.
+
+Two related traps in the same family: a converted penalty is filed under
+`penalty---scored`, not `goal`, so counting only goals loses the most
+price-moving event a match has; and a stoppage-time goal at 90+4' can arrive
+against a clock still reporting 90', which gives a negative age unless clamped.
 
 ## Tests
 
