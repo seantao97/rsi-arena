@@ -12,7 +12,7 @@ repository: this one is public.
 ## Before starting: is there anything to trade?
 
 ```bash
-python -m topics.kalshi.agents.slate --league EPL,LALIGA,SERIEA,MLS
+python -m topics.kalshi.run.slate --league EPL,LALIGA,SERIEA,MLS
 ```
 
 ```
@@ -38,7 +38,7 @@ this command exists.
 ```bash
 export OPENROUTER_API_KEY=...
 
-python -m topics.kalshi.agents.supervisor \
+python -m topics.kalshi.run.supervisor \
     --league EPL,LALIGA,SERIEA,MLS,ARGENTINA,BRASIL \
     --mode horizon --discover \
     --max-contracts 12 --max-per-game 3 \
@@ -59,11 +59,11 @@ free.
 ### Scoring it
 
 ```bash
-python -m topics.kalshi.agents.verify --mode horizon \
+python -m topics.kalshi.eval.verify --mode horizon \
     --feed ~/.kalshi-tonight/forecasts.jsonl --plots
 
 # several evenings pooled, with what each contributed
-python -m topics.kalshi.agents.verify --mode horizon \
+python -m topics.kalshi.eval.verify --mode horizon \
     --feed "~/.kalshi-mon/forecasts.jsonl,~/.kalshi-tue/forecasts.jsonl"
 ```
 

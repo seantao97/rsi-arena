@@ -2,11 +2,11 @@
 
     export OPENROUTER_API_KEY=...
 
-    python -m topics.kalshi.agents --league MLB              # pick a live market and forecast it
-    python -m topics.kalshi.agents TICKER --agent freeform
-    python -m topics.kalshi.agents TICKER --agent both --trace
-    python -m topics.kalshi.agents --league EPL --dry-run    # tools only, no model calls
-    python -m topics.kalshi.agents TICKER --watch            # re-forecast a live game as it moves
+    python -m topics.kalshi.run --league MLB              # pick a live market and forecast it
+    python -m topics.kalshi.run TICKER --agent freeform
+    python -m topics.kalshi.run TICKER --agent both --trace
+    python -m topics.kalshi.run --league EPL --dry-run    # tools only, no model calls
+    python -m topics.kalshi.run TICKER --watch            # re-forecast a live game as it moves
 
 ``--dry-run`` exercises the primitive set against the live exchange without
 spending anything, which is the fastest way to tell whether a failure is in the

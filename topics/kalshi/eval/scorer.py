@@ -138,4 +138,9 @@ def horizon_skill(ticker: str, at: datetime, mid_now: float,
     return scorer
 
 
-register_scorer("horizon_skill", horizon_skill)
+# ``replace=True`` because this runs at import, and a module can be imported
+# more than once in a process — a reload, a tool resolving the package by two
+# paths, ``importlib.util.find_spec`` on a submodule. Without it the second
+# import raises and takes the whole package down with it, which is a strange way
+# for a scorer registration to fail.
+register_scorer("horizon_skill", horizon_skill, replace=True)
