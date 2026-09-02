@@ -5,17 +5,16 @@ collector that records the answers at high frequency.
 
 | Question | Module |
 |---|---|
-| *What can I bet on?* | [`discovery.py`](discovery.py) — series, events, markets, classified by sport, league and market type |
-| *What is this market worth right now?* | [`quotes.py`](quotes.py) — live quotes and order books |
-| *What was it worth at 14:03, or over its whole life?* | [`history.py`](history.py) — candlesticks from the API, open or settled markets |
-| *What is actually happening in the game?* | [`gamestate.py`](gamestate.py) — scores, situation and play-by-play |
-| *What did the price do when it happened?* | [`timeline.py`](timeline.py) — game events and market candles on one UTC clock |
-| *Which game is this market about?* | [`linking.py`](linking.py) — parses fixtures out of event tickers and matches them to the game feed |
-| *Is anything priced inconsistently?* | [`coherence.py`](coherence.py) — no-arb checks across related markets, net of fees |
-| *Is there edge left after costs?* | [`fees.py`](fees.py) — fee schedule, breakeven, Kelly, CLV |
-| *Record all of it* | [`recorder.py`](recorder.py), [`storage.py`](storage.py) |
+| *What can I bet on?* | [`_discovery.py`](tools/_discovery.py) — series, events, markets, classified by sport, league and market type |
+| *What is this market worth right now?* | [`_quotes.py`](tools/_quotes.py) — live quotes and order books |
+| *What was it worth at 14:03, or over its whole life?* | [`_history.py`](tools/_history.py) — candlesticks from the API, open or settled markets |
+| *What is actually happening in the game?* | [`_gamestate.py`](tools/_gamestate.py) — scores, situation and play-by-play |
+| *What did the price do when it happened?* | [`_timeline.py`](tools/_timeline.py) — game events and market candles on one UTC clock |
+| *Which game is this market about?* | [`_linking.py`](tools/_linking.py) — parses fixtures out of event tickers and matches them to the game feed |
+| *Is anything priced inconsistently?* | [`_coherence.py`](tools/_coherence.py) — no-arb checks across related markets, net of fees |
+| *Is there edge left after costs?* | [`_fees.py`](tools/_fees.py) — fee schedule, breakeven, Kelly, CLV |
 
-Credentials are optional — [`credentials.py`](credentials.py) reads the same
+Credentials are optional — [`_credentials.py`](tools/_credentials.py) reads the same
 environment variables the other Kalshi tools in this account already use.
 
 ## Layout
@@ -69,12 +68,6 @@ for g in gamestate.todays_games("MLB"):
     print(st.away, st.away_score, "@", st.home, st.home_score, st.detail["outs"], "outs")
 ```
 
-Record continuously:
-
-```bash
-python -m topics.kalshi.recorder --leagues MLB,NFL,NBA --db kalshi.db   # game state only
-```
-
 ## History — no storage, always the API
 
 Kalshi keeps the whole life of every market, open or settled, so nothing is
@@ -117,7 +110,7 @@ Verified against the live exchange on 2026-08-17.
 - **13,029 series exist; 3,403 are sports** — the largest category on the exchange,
   ahead of Entertainment (2,500) and Politics (2,150).
 - **Sport *is* an API field, in `tags`.** It covers 96% of sports series and is
-  far better than pattern-matching a ticker, so [`taxonomy.py`](taxonomy.py)
+  far better than pattern-matching a ticker, so [`_taxonomy.py`](tools/_taxonomy.py)
   reads it first and falls back to regex. Sport is unresolved for 4% of series;
   126 have no derivable league, reported as `UNKNOWN` rather than guessed.
 - **`frequency` separates fixtures from futures.** `custom`/`daily`/`weekly`

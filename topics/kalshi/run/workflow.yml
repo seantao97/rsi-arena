@@ -64,7 +64,7 @@ jobs:
           # The supervisor stops on its own at the budget ceiling; this is the
           # wall-clock backstop so the job always reaches the scoring step and
           # uploads what it has. Exit 124 from timeout is the expected path.
-          timeout "${MINUTES}m" python -m topics.kalshi.agents.supervisor \
+          timeout "${MINUTES}m" python -m topics.kalshi.run.supervisor \
             --league "$LEAGUES" --mode horizon --discover \
             --max-contracts 12 --poll 150 --budget "$BUDGET" --per-run 0.06 \
             --rescan 600 --state-dir ./run \
@@ -106,7 +106,7 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          python -m topics.kalshi.agents.verify --mode horizon \
+          python -m topics.kalshi.eval.verify --mode horizon \
             --feed ./run/forecasts.jsonl --plots | tee ./report.txt
           {
             echo '## Horizon report'
