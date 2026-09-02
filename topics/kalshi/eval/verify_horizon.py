@@ -11,7 +11,7 @@ worth running if it beats that. Everything here is reported against it, and the
 skill number is negative when it is not beaten. Absolute error alone would look
 impressive on a quiet market and mean nothing.
 
-    python -m topics.kalshi.agents.verify --mode horizon --plots
+    python -m topics.kalshi.eval.verify --mode horizon --plots
 """
 
 from __future__ import annotations

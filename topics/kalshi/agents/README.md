@@ -1,10 +1,38 @@
-# Kalshi in-play agent
+# Kalshi agent configs
 
-A working agent that trades soccer while the match is being played, built only
-on the data modules in `topics/kalshi/`. It is deliberately a **base harness**,
-not a tuned model: RSI is meant to hand this to a model and let it write a
-better one, and that only works if the starting point is simple enough to read
-and honest enough to score.
+**This directory holds JSON and nothing else.** Each file is one agent: its
+name, its context, its model settings, the tool names its plan may call, and the
+plan itself. Every line of Python that runs them is in [`../run/`](../run/), and
+everything that scores them is in [`../eval/`](../eval/).
+
+The split is what makes a harness comparable. A config is data the arena can
+diff, version and mutate; if the same file also held the loop that drives it,
+"the harness changed" would stop meaning anything specific.
+
+| config | |
+|---|---|
+| `kalshi-horizon-5m.json` | where this contract's mid goes in five minutes |
+| `kalshi-sports-inplay.json` | settlement probability, during the match |
+| `kalshi-sports-pipeline.json` | settlement probability, with a research step |
+| `kalshi-sports-freeform.json` | one prompt, all tools, no plan — the control |
+
+```python
+from topics.kalshi.run.load import load_agent
+agent = load_agent("horizon")          # short label, or the full file name
+```
+
+Binding is by tool *name*, which is the useful part: the same config loads
+against the live exchange or against `eval.replay`'s frozen tools, because both
+boxes answer to `market_quote`, `candlesticks` and `previous_trades`. That is
+how a benchmark replays a harness without the harness knowing it is being
+replayed.
+
+An unknown tool name raises when the config loads, not at the step that calls
+it — so a bad mutation fails immediately instead of four hours into a night.
+
+The agent below is deliberately a **base harness**, not a tuned model: RSI is
+meant to hand this to a model and let it write a better one, and that only works
+if the starting point is simple enough to read and honest enough to score.
 
 ## The task
 
@@ -56,12 +84,12 @@ made the money.
 
 ```bash
 # autonomous: sweep several leagues, adopt live markets, stop at $3
-python -m topics.kalshi.agents.supervisor \
+python -m topics.kalshi.run.supervisor \
     --league EPL,LALIGA,MLS,USL --mode horizon --discover \
     --max-contracts 8 --poll 150 --budget 3.00
 
 # score the windows that have come due
-python -m topics.kalshi.agents.verify --mode horizon --plots
+python -m topics.kalshi.eval.verify --mode horizon --plots
 ```
 
 `--discover` is what makes it a service. It rescans the leagues, adopts live
@@ -154,19 +182,25 @@ higher.
 That is the shape of the target. Not "trade more": **predict a move large enough
 to pay for itself**, and stop selling the winners.
 
-## Layout
+## Where the rest of it lives
 
-| file | |
+| | |
 |---|---|
-| `horizon.py` | the agent, `quote_from()`, and `decide()` — the trading rule |
-| `agents.py` | the earlier probability agents (`pipeline`, `freeform`, `inplay`) |
-| `tools.py` | 19 async tools over `topics/kalshi/` |
-| `supervisor.py` | discovery, polling, budget, durable state |
-| `validation.py` | refuses to act on output that disagrees with itself |
-| `bench/` | the same windows of a finished match, for comparing two harnesses |
-| `verify.py` | settlement scoring — Brier, calibration, paper pnl |
-| `verify_horizon.py` | five-minute scoring — skill, fills, coverage, pnl |
-| `__main__.py` | single-shot and `--watch` runs |
+| `../run/load.py` | JSON to `Agent`, and the short labels the CLI takes |
+| `../run/trading.py` | `quote_from()` and `decide()` — the trading rule |
+| `../run/supervisor.py` | discovery, polling, budget, durable state |
+| `../run/__main__.py` | single-shot and `--watch` runs |
+| `../run/slate.py` | what is actually tradeable today |
+| `../eval/validation.py` | refuses to act on output that disagrees with itself |
+| `../eval/verify.py` | settlement scoring — Brier, calibration, paper pnl |
+| `../eval/verify_horizon.py` | five-minute scoring — skill, fills, coverage, pnl |
+| `../eval/replay.py` | the same windows of a finished match, for comparing harnesses |
+
+**The model predicts; the code decides.** A config returns a *change* and a quote
+width; `decide()` turns those into an action against the live book and the fee
+schedule. Nothing is left to the model that arithmetic can settle, which removed
+a defect seen live — a position that contradicted the edge the same output
+reported. That rule is why `trading.py` is Python and not part of the config.
 
 The probability agents are kept because settlement scoring answers a different
 question — whether the agent understands the game — and both signals are useful

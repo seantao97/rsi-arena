@@ -142,8 +142,8 @@ async def run_harness(spec: dict, line: Timeline, tickers: list[str],
 
 def default_spec() -> dict:
     """The harness this benchmark exists to be beaten."""
-    from ..agents.horizon import horizon_agent
-    return horizon_agent(AgentConfig(default_model="anthropic/claude-sonnet-4.5",
+    from ..run.load import load_agent
+    return load_agent("horizon", config=AgentConfig(default_model="anthropic/claude-sonnet-4.5",
                                      max_usd=0.10)).to_dict()
 
 

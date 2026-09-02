@@ -21,8 +21,8 @@ import sys
 sys.path.insert(0, ".")
 
 from rsi_arena import AgentConfig                       # noqa: E402
-from topics.kalshi.agents.horizon import (  # noqa: E402
-    decide, horizon_agent, quote_from)
+from topics.kalshi.run.load import load_agent          # noqa: E402
+from topics.kalshi.run.trading import decide, quote_from  # noqa: E402
 from topics.kalshi import gamestate as gs               # noqa: E402
 from topics.kalshi.tools import TOOLS                   # noqa: E402
 
@@ -108,7 +108,7 @@ async def main() -> int:
     bid, ask = market["yes_bid"], market["yes_ask"]
     mid = (bid + ask) / 2
 
-    agent = horizon_agent(AgentConfig(default_model="anthropic/claude-sonnet-4.5",
+    agent = load_agent("horizon", config=AgentConfig(default_model="anthropic/claude-sonnet-4.5",
                                       max_usd=0.10))
     run = await agent.run(ticker, game="preflight — no live fixture")
     out = run.output if isinstance(run.output, dict) else {}

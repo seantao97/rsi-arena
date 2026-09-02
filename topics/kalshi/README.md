@@ -24,11 +24,17 @@ Five things, and the dependency arrows only point one way:
 
 ```
 tools/    the 40 primitives a model may call, and the data layer they wrap
-agents/   the harnesses being ranked — they compose tools, never extend them
-eval/     replay scoring: put a harness at a past instant, score what it says
-run/      scheduling and preflight
+agents/   JSON configs, one per harness — no Python at all
+run/      everything that drives them: loader, supervisor, trading rule, CLI
+eval/     everything that scores them: replay, verify, validation
 README.md this
 ```
+
+`agents/` holding only data is the point rather than tidiness. A config is
+something the arena can diff, version and mutate; once the same file also holds
+the loop that drives it, "the harness changed" stops meaning anything specific.
+So the plan, the prompt and the tool list are JSON, and the loop that keeps them
+forecasting is `run/supervisor.py`.
 
 Inside `tools/`, **a leading underscore means machinery, not a primitive**:
 `_gamestate.py` reaches ESPN, `game_state.py` is the tool that wraps it;
@@ -37,9 +43,12 @@ Inside `tools/`, **a leading underscore means machinery, not a primitive**:
 by hand, so a helper dropped in the directory is never registered by accident.
 
 Import the data layer through this package rather than reaching past the
-underscore: `from topics.kalshi import History, edge, gamestate`. `agents/` and
-`eval/` both do, which is what keeps `eval` able to score a harness it does not
-depend on.
+underscore: `from topics.kalshi import History, edge, gamestate`.
+
+The arrows run `tools/ ← run/ ← eval/`. `eval/` reaching into `run/` for
+`quote_from` is the one edge that goes against the grain, and it is deliberate:
+reconstructing what a harness quoted has to use the same arithmetic the harness
+did, or the score measures the reimplementation.
 
 ## Quickstart
 

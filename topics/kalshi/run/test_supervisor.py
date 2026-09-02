@@ -1,4 +1,4 @@
-"""``topics.kalshi.agents.supervisor`` — that it loads, and that the book adds up.
+"""``topics.kalshi.run.supervisor`` — that it loads, and that the book adds up.
 
 The first of these exists because a misplaced import shipped to main. Every
 test at the time covered horizon.py and the benchmark; none of them imported
@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from .. import fixture_key
-from .horizon import Holding
+from .trading import Holding
 from .supervisor import Supervisor
 
 

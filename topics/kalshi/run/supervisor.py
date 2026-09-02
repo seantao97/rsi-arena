@@ -16,8 +16,8 @@ What it guarantees while running:
 * **Spend is bounded across restarts**, not per process, because a crash loop
   that resets the budget is how a ceiling silently stops being one.
 
-    python -m topics.kalshi.agents.supervisor --league EPL --contracts TICKER
-    python -m topics.kalshi.agents.supervisor --league EPL --discover --mode horizon
+    python -m topics.kalshi.run.supervisor --league EPL --contracts TICKER
+    python -m topics.kalshi.run.supervisor --league EPL --discover --mode horizon
 
 ``--discover`` is the autonomous form: it rescans the league for live markets,
 takes on new ones, releases settled ones, and keeps going. Nothing needs a
@@ -40,7 +40,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .. import fixture_key
-from .agents import AGENTS, default_config
+from .load import short_names as agent_configs, default_config, load_agent
 from ..tools import TOOLS, kalshi_tools
 
 
@@ -337,7 +337,7 @@ class Supervisor:
             if pos.holding:
                 # Never closed, so it pays what the contract pays — a dollar or
                 # nothing. This is the cost of not deciding to get out.
-                from .horizon import Holding as _H
+                from .trading import Holding as _H
                 held = _H.from_dict(pos.holding)
                 payout = 1.0 if ((result == "yes") == (held.side == "YES")) else 0.0
                 settled_pnl = round(held.contracts * (payout - held.price)
@@ -393,9 +393,9 @@ class Supervisor:
 
     async def _probability_tick(self, pos: Position, fingerprint: tuple) -> dict:
         """Ask for a probability, then check the arithmetic before recording."""
-        from .validation import validate
+        from ..eval.validation import validate
 
-        agent = AGENTS[self.agent_name](self.config, self.tools)
+        agent = load_agent(self.agent_name, tools=self.tools, config=self.config)
         run = await agent.run(pos.ticker)
         pos.spent_usd += run.cost_usd
         pos.forecasts += 1
@@ -423,10 +423,11 @@ class Supervisor:
 
     async def _horizon_tick(self, pos: Position, fingerprint: tuple) -> dict:
         """Predict the price five minutes out; let arithmetic decide the trade."""
-        from .horizon import (HORIZON_MINUTES, Holding, decide, horizon_agent,
+        from .load import load_agent
+        from .trading import (HORIZON_MINUTES, Holding, decide,
                               quote_from, target_time)
         from .. import maker_fee, taker_fee
-        from .validation import validate_horizon
+        from ..eval.validation import validate_horizon
         from .. import Quotes
 
         # The supervisor already knows the fixture, so the game state is passed
@@ -457,7 +458,7 @@ class Supervisor:
                 placed_at = datetime.fromisoformat(order["placed_at"])
             except (KeyError, ValueError):
                 placed_at = datetime.now(timezone.utc)
-            from .horizon import HORIZON_MINUTES
+            from .trading import HORIZON_MINUTES
             expired = (datetime.now(timezone.utc) - placed_at
                        >= timedelta(minutes=HORIZON_MINUTES))
             if not filled and not expired:
@@ -574,7 +575,7 @@ class Supervisor:
             placed = datetime.fromisoformat(order["placed_at"])
         except (KeyError, ValueError):
             return False
-        from .horizon import HORIZON_MINUTES
+        from .trading import HORIZON_MINUTES
         expired = min(placed + timedelta(minutes=HORIZON_MINUTES),
                       datetime.now(timezone.utc))
         if expired <= placed:
@@ -621,7 +622,7 @@ async def main() -> int:
     ap.add_argument("--max-per-game", type=int, default=3,
                     help="cap slots one fixture may hold, so a match already "
                          "under way leaves room for later kickoffs")
-    ap.add_argument("--agent", default="inplay", choices=list(AGENTS))
+    ap.add_argument("--agent", default="inplay", choices=agent_configs())
     ap.add_argument("--poll", type=float, default=45.0)
     ap.add_argument("--price-step", type=float, default=0.03)
     ap.add_argument("--budget", type=float, default=10.0, help="total USD across restarts")

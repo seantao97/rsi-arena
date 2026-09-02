@@ -29,7 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
-from topics.kalshi.agents.agents import AGENTS, default_config  # noqa: E402
+from topics.kalshi.run.load import (  # noqa: E402
+    short_names as agent_configs, default_config, load_agent)
 from topics.kalshi.tools import TOOLS, kalshi_tools  # noqa: E402
 
 
@@ -117,7 +118,7 @@ async def watch(ticker: str, league: str, agent_name: str, config,
     emit(f"watching {located.raw_output['away']} @ {located.raw_output['home']} "
           f"(game {game_id}), polling every {poll_s:.0f}s\n")
 
-    agent = AGENTS[agent_name](config, tools)
+    agent = load_agent(agent_name, tools=tools, config=config)
     last, spent = None, 0.0
     while True:
         try:
@@ -159,7 +160,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser(description="Kalshi sports prediction agent")
     ap.add_argument("ticker", nargs="?", help="market ticker; omit to pick one from --league")
     ap.add_argument("--league", default="MLB", help="league code used to pick a market")
-    ap.add_argument("--agent", default="pipeline", choices=[*AGENTS, "both"])
+    ap.add_argument("--agent", default="pipeline", choices=[*agent_configs(), "both"])
     ap.add_argument("--max-usd", type=float, default=2.00)
     ap.add_argument("--trace", action="store_true", help="print the span tree")
     ap.add_argument("--dry-run", action="store_true", help="exercise tools, no model calls")
@@ -190,11 +191,11 @@ async def main() -> int:
     tools = kalshi_tools()
 
     if args.watch:
-        name = args.agent if args.agent in AGENTS else "inplay"
+        name = args.agent if args.agent in agent_configs() else "inplay"
         return await watch(ticker, args.league, name, config, tools,
                            args.poll, args.price_step, args.budget)
 
-    names = list(AGENTS) if args.agent == "both" else [args.agent]
+    names = agent_configs() if args.agent == "both" else [args.agent]
 
     for name in names:
         agent = AGENTS[name](config, tools)

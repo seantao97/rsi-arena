@@ -1,4 +1,4 @@
-"""``topics.kalshi.agents.horizon`` — the parts that broke in production.
+"""``topics.kalshi.run.trading`` — the parts that broke in production.
 
 Each of these exists because it went wrong live, in a way that reading the diff
 did not catch.
@@ -6,7 +6,8 @@ did not catch.
 
 from __future__ import annotations
 
-from .horizon import Holding, decide, horizon_agent, horizon_tools, quote_from
+from .load import available, load_agent
+from .trading import Holding, decide, quote_from
 
 
 # --- the agent ----------------------------------------------------------------
@@ -16,15 +17,27 @@ def test_agent_builds_with_no_toolbox_supplied() -> None:
     """The supervisor passes a toolbox; nothing else does.
 
     A refactor deleted horizon_tools() and the supervisor never noticed, because
-    ``tools or horizon_tools()`` short-circuits when a toolbox is given. It
+    ``tools or horizon_tools()`` short-circuited when a toolbox was given. It
     reached main and broke every other caller — the preflight check, a bare
     script, anything constructing the agent on its own.
+
+    The plan is a JSON config now, so the same class of fault looks different:
+    a config naming a tool the registry does not have. ``from_dict`` raises on
+    load rather than at the first call, and this asserts that it resolves.
     """
-    agent = horizon_agent()
+    agent = load_agent("horizon")
     assert [step.name for step in agent.plan.steps] == \
         ["quote", "path", "tape", "predict"]
-    assert {tool.name for tool in horizon_tools()} == \
+    assert {tool.name for tool in agent.tools} == \
         {"market_quote", "candlesticks", "previous_trades"}
+
+
+def test_every_config_binds_against_the_live_registry() -> None:
+    """A tool renamed in ``tools/`` and not in a config is a load-time error, and
+    would otherwise surface only when that step ran, hours into a night."""
+    for name in available():
+        agent = load_agent(name)
+        assert agent.name and len(agent.plan.steps) >= 1, name
 
 
 # --- the trading rule ---------------------------------------------------------
