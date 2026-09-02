@@ -21,7 +21,7 @@ def test_agent_builds_with_no_toolbox_supplied() -> None:
     assert [step.name for step in agent.plan.steps] == \
         ["quote", "path", "tape", "predict"]
     assert {tool.name for tool in horizon_tools()} == \
-        {"market_quote", "price_history", "recent_trades"}
+        {"market_quote", "candlesticks", "previous_trades"}
 
 
 def test_anchor_is_the_exchange_mid_not_the_models_reading() -> None:

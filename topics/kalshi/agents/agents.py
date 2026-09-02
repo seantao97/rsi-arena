@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from rsi_arena import Agent, AgentConfig, LoopStep, Plan, PromptStep, Toolbox, ToolStep
 
-from .tools import kalshi_tools
+from ..tools import kalshi_tools
 
 # Identical across both agents on purpose. If the context differs, a battle
 # between them measures the context and not the orchestration.

@@ -30,7 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from topics.kalshi.agents.agents import AGENTS, default_config  # noqa: E402
-from topics.kalshi.agents.tools import kalshi_tools  # noqa: E402
+from topics.kalshi.tools import TOOLS, kalshi_tools  # noqa: E402
 
 
 def pick_market(league: str) -> str | None:
@@ -105,15 +105,16 @@ def emit(*parts: object) -> None:
 async def watch(ticker: str, league: str, agent_name: str, config,
                 tools, poll_s: float, price_step: float, budget: float) -> int:
     """Re-forecast a live contract whenever the game or the price moves."""
-    from topics.kalshi.agents.tools import find_game_for_market
 
     event = ticker.rsplit("-", 1)[0]
-    located = await find_game_for_market(event_ticker=event, league=league)
-    if not located.ok or "game_id" not in (located.output or {}):
-        emit(f"could not link {event} to a fixture: {located.output}", file=sys.stderr)
+    located = await TOOLS["find_game_for_market"].acall(
+        event_ticker=event, league=league)
+    if not located.ok or "game_id" not in located.raw_output:
+        emit(f"could not link {event} to a fixture: {located.response}",
+             file=sys.stderr)
         return 1
-    game_id = located.output["game_id"]
-    emit(f"watching {located.output['away']} @ {located.output['home']} "
+    game_id = located.raw_output["game_id"]
+    emit(f"watching {located.raw_output['away']} @ {located.raw_output['home']} "
           f"(game {game_id}), polling every {poll_s:.0f}s\n")
 
     agent = AGENTS[agent_name](config, tools)
