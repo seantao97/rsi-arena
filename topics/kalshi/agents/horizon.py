@@ -48,7 +48,7 @@ from datetime import datetime, timedelta, timezone
 from rsi_arena import Agent, AgentConfig, Plan, PromptStep, Toolbox, ToolStep
 
 from ..fees import maker_fee, taker_fee
-from .tools import market_quote, price_history, recent_trades
+from ..tools import kalshi_tools
 
 HORIZON_MINUTES = 5
 
@@ -335,7 +335,7 @@ def horizon_tools() -> Toolbox:
     you by reaching for it, which matters once a model is rewriting this
     harness.
     """
-    return Toolbox([market_quote, price_history, recent_trades])
+    return kalshi_tools(["market_quote", "candlesticks", "previous_trades"])
 
 
 def horizon_agent(config: AgentConfig | None = None,
@@ -358,11 +358,11 @@ def horizon_agent(config: AgentConfig | None = None,
             ToolStep(name="quote", tool="market_quote",
                      args={"ticker": "{{question}}"}, output_key="quote",
                      fail_ok=True),
-            ToolStep(name="path", tool="price_history",
+            ToolStep(name="path", tool="candlesticks",
                      args={"ticker": "{{question}}", "hours_back": 0.75,
                            "hourly": False},
                      output_key="path", fail_ok=True),
-            ToolStep(name="tape", tool="recent_trades",
+            ToolStep(name="tape", tool="previous_trades",
                      args={"ticker": "{{question}}", "limit": 12},
                      output_key="tape", fail_ok=True),
             PromptStep(

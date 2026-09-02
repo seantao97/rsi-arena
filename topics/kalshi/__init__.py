@@ -31,6 +31,7 @@ from .history import Candle, History, DAY, HOUR, MINUTE
 from .quotes import OrderBook, Quote, Quotes
 from .timeline import Entry, Reaction, Timeline
 from .stream import KalshiStream, LiveBook
+from .tools import TOOLS, kalshi_tools
 from .taxonomy import MarketType, SeriesClass, Sport, classify_series
 
 __all__ = [
@@ -43,4 +44,5 @@ __all__ = [
     "Fixture", "FieldEvent", "Link", "parse_event_ticker", "parse_field_event",
     "field_entrants", "harvest_team_codes", "KalshiStream", "LiveBook",
     "Sport", "MarketType", "SeriesClass", "classify_series",
+    "TOOLS", "kalshi_tools",
 ]

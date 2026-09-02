@@ -21,7 +21,8 @@ from typing import Annotated
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from rsi_arena import Agent, AgentConfig, Plan, PromptStep, Toolbox, ToolStep, tool  # noqa: E402
+from rsi_arena import (Agent, AgentConfig, Plan, PromptStep, Tool,  # noqa: E402
+                       ToolOutput, Toolbox, ToolStep)
 from rsi_arena.core.template import evaluate  # noqa: E402
 
 CONTEXT = """You are a careful estimator. You decompose a quantity into factors you can
@@ -30,17 +31,30 @@ factor supports. You do not do arithmetic in your head — you write the express
 the calculator run it."""
 
 
-@tool
-def calculator(
-    expression: Annotated[str, "An arithmetic expression, e.g. '(2.7e6 / 4) * 0.02'."],
-) -> float:
-    """Evaluate an arithmetic expression exactly.
+class Calculator(Tool):
+    """Arithmetic, exactly, on a string the model wrote."""
 
-    Backed by the same restricted evaluator that runs loop conditions, so it
-    computes arithmetic and nothing else — a model-authored string is never
-    handed to ``eval``.
-    """
-    return float(evaluate(expression, {}))
+    name = "calculator"
+    description = (
+        "Evaluate an arithmetic expression exactly.\n\n"
+        "Backed by the same restricted evaluator that runs loop conditions, so "
+        "it computes arithmetic and nothing else — a model-authored string is "
+        "never handed to eval."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {"expression": {
+            "type": "string",
+            "description": "An arithmetic expression, e.g. '(2.7e6 / 4) * 0.02'."}},
+        "required": ["expression"],
+    }
+
+    def get_tool_output(self, input):
+        value = float(evaluate(input["expression"], {}))
+        return ToolOutput(response=repr(value), raw_output={"value": value})
+
+
+calculator = Calculator()
 
 
 DECOMPOSITION_SCHEMA = {
@@ -79,14 +93,14 @@ def build_agent(model: str) -> Agent:
                 name="compute",
                 tool="calculator",
                 args={"expression": "{{decomposition.expression}}"},
-                output_key="value",
+                output_key="computed",
             ),
             PromptStep(
                 name="write_up",
                 prompt=(
                     "Question: {{question}}\n\n"
                     "Your decomposition:\n{{decomposition}}\n\n"
-                    "The calculator returned: {{value}}\n\n"
+                    "The calculator returned: {{computed.value}}\n\n"
                     "Write the estimate in under 200 words. State the number, the factors, "
                     "and say which one you would check first if the answer mattered "
                     "(you said it was {{decomposition.weakest_factor}})."

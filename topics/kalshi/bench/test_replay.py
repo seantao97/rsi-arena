@@ -1,4 +1,4 @@
-"""Checks that the benchmark measures forecasting and not hindsight.
+"""``topics.kalshi.bench`` — that the benchmark measures forecasting, not hindsight.
 
 A replay benchmark has one way to be silently worthless: let something through
 that had not happened yet. Every read is bounded, so every read is checked.
@@ -16,6 +16,9 @@ from .scorer import WindowScore, score_window
 GAME = "401879319"          # Newcastle 2-2 Liverpool, 23 Aug 2026
 TICKER = "KXEPLGAME-26AUG23NEWLFC-NEW"
 AT = datetime(2026, 8, 23, 16, 30, tzinfo=timezone.utc)
+
+
+# --- nothing leaks from the future --------------------------------------------
 
 
 def test_the_score_is_rebuilt_not_read_off() -> None:
@@ -52,19 +55,24 @@ def test_no_price_leaks_from_the_future() -> None:
     tools = replay_tools(AT)
 
     async def go() -> None:
-        quote = await tools.get("market_quote")(ticker=TICKER)
-        assert quote.ok and quote.output.get("mid") is not None
+        # Read the structure rather than the sentence: this is a check on the
+        # data, and the sentence is written for a model.
+        quote = await tools.get("market_quote").aget_tool_output(ticker=TICKER)
+        assert quote.ok and quote.raw_output.get("mid") is not None
 
-        bars = await tools.get("price_history")(ticker=TICKER, hours_back=0.75)
-        assert bars.ok and bars.output
-        assert all(datetime.fromisoformat(b["ts"]) <= AT for b in bars.output)
+        bars = await tools.get("candlesticks").aget_tool_output(
+            ticker=TICKER, hours_back=0.75)
+        assert bars.ok and bars.raw_output["bars"]
+        assert all(datetime.fromisoformat(b["ts"]) <= AT
+                   for b in bars.raw_output["bars"])
 
-        tape = await tools.get("recent_trades")(ticker=TICKER, limit=12)
-        assert tape.ok and tape.output, "the tape must not fail silently"
-        assert all(t["ts"] and t["ts"][:19] <= AT.isoformat()[:19]
-                   for t in tape.output)
+        tape = await tools.get("previous_trades").aget_tool_output(
+            ticker=TICKER, limit=12)
+        assert tape.ok and tape.raw_output["trades"], "the tape must not fail silently"
+        trades = tape.raw_output["trades"]
+        assert all(t["ts"] and t["ts"][:19] <= AT.isoformat()[:19] for t in trades)
         # And it must carry real prices, not Nones from a renamed field.
-        assert all(t["yes_price"] is not None for t in tape.output)
+        assert all(t["yes_price"] is not None for t in trades)
 
     asyncio.run(go())
 
@@ -76,6 +84,9 @@ def test_the_answer_is_after_the_question() -> None:
     answer = history.quote_at(TICKER, AT + timedelta(minutes=5), MINUTE)
     assert asked is not None and answer is not None
     assert asked.ts <= AT < answer.ts
+
+
+# --- scoring ------------------------------------------------------------------
 
 
 def test_skill_is_zero_for_repeating_the_market() -> None:

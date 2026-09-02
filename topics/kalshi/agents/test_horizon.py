@@ -1,4 +1,4 @@
-"""Checks that run without the network, on the parts that broke in production.
+"""``topics.kalshi.agents.horizon`` — the parts that broke in production.
 
 Each of these exists because it went wrong live, in a way that reading the diff
 did not catch.
@@ -7,6 +7,9 @@ did not catch.
 from __future__ import annotations
 
 from .horizon import Holding, decide, horizon_agent, horizon_tools, quote_from
+
+
+# --- the agent ----------------------------------------------------------------
 
 
 def test_agent_builds_with_no_toolbox_supplied() -> None:
@@ -21,7 +24,10 @@ def test_agent_builds_with_no_toolbox_supplied() -> None:
     assert [step.name for step in agent.plan.steps] == \
         ["quote", "path", "tape", "predict"]
     assert {tool.name for tool in horizon_tools()} == \
-        {"market_quote", "price_history", "recent_trades"}
+        {"market_quote", "candlesticks", "previous_trades"}
+
+
+# --- the trading rule ---------------------------------------------------------
 
 
 def test_anchor_is_the_exchange_mid_not_the_models_reading() -> None:

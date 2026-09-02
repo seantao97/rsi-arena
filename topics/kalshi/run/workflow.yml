@@ -1,0 +1,128 @@
+name: Kalshi in-play horizon run
+
+# Start well before kickoff when scheduled: a workflow can fire twenty to
+# forty minutes late under load, the opening windows of a match are the ones
+# worth having, and discovery idles for free until the markets go live.
+on:
+  # Times are set for when the run should *start*, minus the delay GitHub
+  # actually applies. Scheduled workflows on this repository have fired at
+  # 19:09Z and 19:10Z on consecutive days from an 18:35Z cron — about four and
+  # a half hours late, and consistently so rather than randomly. Left uncorrected
+  # that pushed every run past the European fixtures and into a window where
+  # almost nothing is listed: one such run collected 43 forecasts and spent
+  # $0.67 of a $30 budget watching an empty board.
+  #
+  # So each cron is set four and a half hours before the window it is meant to
+  # cover. If GitHub's delay changes, these move with it.
+  schedule:
+    - cron: "55 07 * * 6,0"    # fires ~12:25Z — weekend early European window
+    - cron: "05 14 * * *"      # fires ~18:35Z — evening European, MLS after
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "How long to collect for"
+        default: "285"
+      budget:
+        description: "USD ceiling for the whole run"
+        default: "30.00"
+      leagues:
+        description: "Comma-separated leagues to sweep"
+        default: "EPL,LALIGA,SERIEA,BUNDESLIGA,LIGUE1,MLS,USL,LIGAMX,ARGENTINA,BRASIL"
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Check out the arena
+        uses: actions/checkout@v7
+        with:
+          repository: seantao97/rsi-arena
+          ref: main
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          pip install -q -r requirements.txt
+          pip install -q matplotlib
+
+      - name: Preflight — can we reach the model at all?
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: python topics/kalshi/run/preflight.py "${{ inputs.leagues || 'EPL,LALIGA,SERIEA,BUNDESLIGA,LIGUE1,MLS,USL,LIGAMX,ARGENTINA,BRASIL' }}"
+
+      - name: Collect
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MINUTES: ${{ inputs.minutes || '285' }}
+          BUDGET: ${{ inputs.budget || '30.00' }}
+          LEAGUES: ${{ inputs.leagues || 'EPL,LALIGA,SERIEA,BUNDESLIGA,LIGUE1,MLS,USL,LIGAMX,ARGENTINA,BRASIL' }}
+        run: |
+          # The supervisor stops on its own at the budget ceiling; this is the
+          # wall-clock backstop so the job always reaches the scoring step and
+          # uploads what it has. Exit 124 from timeout is the expected path.
+          timeout "${MINUTES}m" python -m topics.kalshi.agents.supervisor \
+            --league "$LEAGUES" --mode horizon --discover \
+            --max-contracts 12 --poll 150 --budget "$BUDGET" --per-run 0.06 \
+            --rescan 600 --state-dir ./run \
+            2>&1 | tee ./supervisor.log || true
+          n=$(wc -l < ./run/forecasts.jsonl 2>/dev/null || echo 0)
+          echo "collected $n forecasts"
+          echo "COLLECTED=$n" >> "$GITHUB_ENV"
+
+      # Collecting nothing is a failure only when there was something to
+      # collect. Preflight already worked out how many live fixtures had a
+      # market and wrote it to LINKABLE; without that check this step cried wolf
+      # on two consecutive quiet weeknights, which is how a red build stops
+      # meaning anything.
+      - name: Was anything actually collected?
+        run: |
+          if [ "${LINKABLE:-0}" -eq 0 ] && [ "${COLLECTED:-0}" -eq 0 ]; then
+            echo "nothing was live and nothing was collected — a quiet night, not a fault"
+            {
+              echo '### Nothing to collect'
+              echo "No live fixture had a market when this started, so there was"
+              echo "nothing for the agent to watch. Not a failure."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "${COLLECTED:-0}" -eq 0 ]; then
+            echo "::error::collected 0 forecasts while ${LINKABLE} fixture(s) had markets — discovery is broken"
+            echo '### Collected nothing' >> "$GITHUB_STEP_SUMMARY"
+            echo "Preflight saw ${LINKABLE} live fixture(s) with a market, and discovery adopted none of them. Linking is broken again." >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -20 ./supervisor.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Let the last windows come due
+        run: sleep 420
+
+      - name: Score
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          python -m topics.kalshi.agents.verify --mode horizon \
+            --feed ./run/forecasts.jsonl --plots | tee ./report.txt
+          {
+            echo '## Horizon report'
+            echo '```'
+            cat ./report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: horizon-run
+          path: |
+            run/forecasts.jsonl
+            run/plots/
+            report.txt
+            supervisor.log
+          if-no-files-found: warn

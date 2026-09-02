@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from .agent import Agent, AgentConfig, AgentResult, ErrorKind
 from .steps import AnyStep, LoopStep, Plan, PromptStep, Step, StepContext, ToolStep
-from .tools import Tool, ToolResult, Toolbox, api_tool, tool
+from .tools import Tool, ToolOutput, ToolResult, Toolbox, api_tool
 
 __all__ = [
     "Agent", "AgentConfig", "AgentResult", "ErrorKind",
     "Plan", "Step", "AnyStep", "PromptStep", "ToolStep", "LoopStep", "StepContext",
-    "Tool", "Toolbox", "ToolResult", "tool", "api_tool",
+    "Tool", "Toolbox", "ToolOutput", "ToolResult", "api_tool",
 ]

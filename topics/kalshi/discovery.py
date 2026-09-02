@@ -229,11 +229,21 @@ class Discovery:
         return out
 
     def active_leagues(self) -> list[str]:
-        """Leagues with at least one open market. Cheap way to see what is in season."""
+        """Leagues with at least one open event.
+
+        Read from ``/events`` rather than ``/markets``. Both answer the
+        question, but a fixture carries a dozen markets and the exchange lists
+        far more than sport, so walking every open market meant tens of
+        thousands of rows and several minutes for a question that takes four
+        seconds. An event also names its series directly, so no prefix
+        resolution is needed.
+        """
         seen: set[str] = set()
         catalog = self.all_series()
-        for m in self.client.paginate("/markets", "markets", {"status": "open"}):
-            cls = self._series_for(m.get("event_ticker", ""), catalog)
+        for event in self.client.paginate("/events", "events", {"status": "open"}):
+            series = event.get("series_ticker") or ""
+            cls = catalog.get(series) or self._series_for(
+                event.get("event_ticker", ""), catalog)
             if cls and cls.league not in ("NONSPORT", "UNKNOWN"):
                 seen.add(cls.league)
         return sorted(seen)

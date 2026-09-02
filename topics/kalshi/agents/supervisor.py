@@ -41,7 +41,7 @@ from pathlib import Path
 
 from ..linking import fixture_key
 from .agents import AGENTS, default_config
-from .tools import kalshi_tools
+from ..tools import TOOLS, kalshi_tools
 
 
 def _now() -> str:
@@ -189,7 +189,6 @@ class Supervisor:
         rescan fills it. That is what makes the service autonomous rather than a
         list of tickers someone typed.
         """
-        from .tools import live_markets
 
         while not self._stop.is_set():
             try:
@@ -201,7 +200,8 @@ class Supervisor:
                     # sequence, and none of them come back short — the counts
                     # match what each returns on its own.
                     swept = await asyncio.gather(
-                        *(live_markets(league=lg, limit=30) for lg in self.leagues),
+                        *(TOOLS["live_markets"].aget_tool_output(league=lg, limit=30)
+                          for lg in self.leagues),
                         return_exceptions=True)
 
                     games: list[tuple[str, list]] = []
@@ -210,7 +210,7 @@ class Supervisor:
                             self._log("discovery_error", league=lg,
                                       error=f"{type(found).__name__}: {found}")
                             continue
-                        for game in (found.output or {}).get("markets", []):
+                        for game in found.raw_output.get("markets", []):
                             tradeable = [m for m in game["markets"]
                                          # No two-sided quote means it can be
                                          # neither traded nor scored.
@@ -361,9 +361,9 @@ class Supervisor:
 
         if pos.game_id is None:
             event = pos.ticker.rsplit("-", 1)[0]
-            from .tools import find_game_for_market
-            found = await find_game_for_market(event_ticker=event, league=pos.league)
-            data = found.output if found.ok else {}
+            found = await TOOLS["find_game_for_market"].aget_tool_output(
+                event_ticker=event, league=pos.league)
+            data = found.raw_output
             pos.game_id = data.get("game_id")
             if not pos.game_id:
                 raise RuntimeError(f"cannot link {event} to a fixture: {data}")
@@ -431,10 +431,11 @@ class Supervisor:
 
         # The supervisor already knows the fixture, so the game state is passed
         # in rather than rediscovered by a tool-calling loop on every tick.
-        from .tools import game_state
-        state = await game_state(league=pos.league, game_id=pos.game_id)
+        state = await TOOLS["game_state"].aget_tool_output(
+            league=pos.league, game_id=pos.game_id)
         agent = horizon_agent(self.config, self.tools)
-        run = await agent.run(pos.ticker, game=json.dumps(state.output)[:1200]
+        run = await agent.run(pos.ticker,
+                              game=json.dumps(state.raw_output)[:1200]
                               if state.ok else "unavailable")
         pos.spent_usd += run.cost_usd
         pos.forecasts += 1
@@ -599,10 +600,9 @@ class Supervisor:
 
 async def _auto_contracts(league: str, limit: int) -> list[str]:
     """Most-traded live markets in a league."""
-    from .tools import live_markets
     found = await live_markets(league=league, limit=40)
     out: list[str] = []
-    for game in (found.output or {}).get("markets", []):
+    for game in found.raw_output.get("markets", []):
         ranked = sorted(game["markets"], key=lambda m: -(m.get("volume") or 0))
         out += [m["ticker"] for m in ranked[:2]]
     return out[:limit]

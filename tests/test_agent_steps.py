@@ -12,9 +12,35 @@ import json
 import pytest
 
 from rsi_arena.agent.steps import LoopStep, Plan, PromptStep, StepContext, ToolStep
+from rsi_arena.agent.tools import Tool, ToolOutput
 from rsi_arena.core.costs import BudgetExceeded, CostTracker
 from rsi_arena.core.trace import Tracer
 from rsi_arena.llm import LLMClient
+
+
+def _echo(name: str, description: str) -> Tool:
+    """A tool that hands back what it was given."""
+    class _Echo(Tool):
+        parameters = {"type": "object", "properties": {"x": {"type": "string"}}}
+
+        def get_tool_output(self, input):
+            return ToolOutput(response=str(input.get("x", "")), raw_output=dict(input))
+
+    _Echo.name, _Echo.description = name, description
+    return _Echo()
+
+
+def _explodes() -> Tool:
+    """A tool that always fails, to check the step's error handling."""
+    class _Explode(Tool):
+        name = "explode"
+        description = "Fails."
+        parameters = {"type": "object", "properties": {"x": {"type": "string"}}}
+
+        def get_tool_output(self, input):
+            raise ValueError("no")
+
+    return _Explode()
 
 
 def make_ctx(llm: LLMClient, toolbox, *, state=None, costs=None, on_token=None) -> StepContext:
@@ -124,14 +150,7 @@ async def test_a_tool_enabled_step_runs_the_model_s_tool_loop(llm, toolbox):
 
 
 async def test_tools_can_be_narrowed_to_a_subset(llm, toolbox, fake):
-    from rsi_arena.agent.tools import tool
-
-    @tool
-    def other(x: str) -> str:
-        """Other."""
-        return x
-
-    toolbox.add(other)
+    toolbox.add(_echo("other", "Other."))
     ctx = make_ctx(llm, toolbox)
     await PromptStep(name="work", prompt="go", tools=["other"]).execute(ctx)
     offered = [t["function"]["name"] for t in fake.bodies[0]["tools"]]
@@ -170,18 +189,21 @@ async def test_a_tool_step_calls_with_templated_arguments(llm, toolbox):
     ctx = make_ctx(llm, toolbox, state={"question": "one two three"})
     out = await ToolStep(name="count", tool="word_count",
                          args={"text": "{{question}}"}, output_key="n").execute(ctx)
-    assert out == 3 and ctx.state["n"] == 3
+    # A declared tool answers with structure, so the step writes the whole
+    # raw_output rather than a bare number.
+    assert out == {"count": 3} and ctx.state["n"] == {"count": 3}
 
 
 async def test_nested_arguments_are_templated_too(llm, toolbox):
-    from rsi_arena.agent.tools import tool
+    class Echo(Tool):
+        name = "echo"
+        description = "Echo."
+        parameters = {"type": "object", "properties": {"payload": {"type": "object"}}}
 
-    @tool
-    def echo(payload: dict) -> dict:
-        """Echo."""
-        return payload
+        def get_tool_output(self, input):
+            return ToolOutput(response="ok", raw_output=input["payload"])
 
-    toolbox.add(echo)
+    toolbox.add(Echo())
     ctx = make_ctx(llm, toolbox, state={"question": "q"})
     out = await ToolStep(name="e", tool="echo",
                          args={"payload": {"nested": ["{{question}}"]}}).execute(ctx)
@@ -189,28 +211,14 @@ async def test_nested_arguments_are_templated_too(llm, toolbox):
 
 
 async def test_a_failing_tool_step_raises_by_default(llm, toolbox):
-    from rsi_arena.agent.tools import tool
-
-    @tool
-    def explode(x: str) -> str:
-        """Fails."""
-        raise ValueError("no")
-
-    toolbox.add(explode)
+    toolbox.add(_explodes())
     ctx = make_ctx(llm, toolbox)
     with pytest.raises(RuntimeError):
         await ToolStep(name="boom", tool="explode", args={"x": "a"}).execute(ctx)
 
 
 async def test_fail_ok_returns_the_error_instead(llm, toolbox):
-    from rsi_arena.agent.tools import tool
-
-    @tool
-    def explode(x: str) -> str:
-        """Fails."""
-        raise ValueError("no")
-
-    toolbox.add(explode)
+    toolbox.add(_explodes())
     ctx = make_ctx(llm, toolbox)
     out = await ToolStep(name="boom", tool="explode", args={"x": "a"}, fail_ok=True).execute(ctx)
     assert "ValueError" in out["error"]
@@ -295,10 +303,10 @@ async def test_a_plan_runs_in_order_and_returns_the_last_result(llm, toolbox):
     ctx = make_ctx(llm, toolbox, state={"question": "one two"})
     plan = Plan(steps=[
         ToolStep(name="count", tool="word_count", args={"text": "{{question}}"}, output_key="n"),
-        PromptStep(name="write", prompt="There are {{n}} words."),
+        PromptStep(name="write", prompt="There are {{n.count}} words."),
     ])
     result = await plan.execute(ctx)
-    assert ctx.state["n"] == 2 and isinstance(result, str)
+    assert ctx.state["n"] == {"count": 2} and isinstance(result, str)
 
 
 async def test_a_step_over_the_ceiling_is_refused_before_it_runs(llm, toolbox, fake):

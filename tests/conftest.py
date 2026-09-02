@@ -36,8 +36,9 @@ from rsi_arena import (  # noqa: E402
     Plan,
     PromptStep,
     RateLimit,
+    Tool,
+    ToolOutput,
     Toolbox,
-    tool,
 )
 from rsi_arena.evals import InMemoryEvalStore, set_default_eval_store  # noqa: E402
 from tests.fakes import Fake  # noqa: E402
@@ -87,12 +88,18 @@ def config() -> AgentConfig:
 
 @pytest.fixture
 def word_count():
-    @tool
-    async def word_count(text: str) -> int:
-        """Count words in a string."""
-        return len(text.split())
+    class WordCount(Tool):
+        name = "word_count"
+        description = "Count words in a string."
+        parameters = {"type": "object",
+                      "properties": {"text": {"type": "string"}},
+                      "required": ["text"]}
 
-    return word_count
+        def get_tool_output(self, input):
+            n = len(input["text"].split())
+            return ToolOutput(response=str(n), raw_output={"count": n})
+
+    return WordCount()
 
 
 @pytest.fixture

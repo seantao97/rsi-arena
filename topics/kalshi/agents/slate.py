@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 
 from .. import gamestate as gs
 from ..linking import fixture_key
-from .tools import live_markets
+from ..tools import TOOLS
 
 
 @dataclass
@@ -54,8 +54,8 @@ async def survey(leagues: list[str]) -> list[LeagueSlate]:
             slate.error = f"{type(exc).__name__}: {exc}"
             return slate
         try:
-            found = await live_markets(league=league, limit=4)
-            slate.tradeable = len((found.output or {}).get("markets", []))
+            found = await TOOLS["live_markets"].aget_tool_output(league=league, limit=4)
+            slate.tradeable = len(found.raw_output.get("markets", []))
         except Exception as exc:
             slate.error = f"{type(exc).__name__}: {exc}"
         return slate

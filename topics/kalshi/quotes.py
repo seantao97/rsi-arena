@@ -130,14 +130,39 @@ class Quotes:
         return out
 
     def get_orderbook(self, ticker: str, depth: int = 10) -> OrderBook:
-        """Resting depth on both sides."""
-        book = self.client.get(f"/markets/{ticker}/orderbook",
-                               {"depth": depth}).get("orderbook", {})
-        return OrderBook(
-            ticker=ticker, ts=_now(),
-            yes=[(int(p), int(q)) for p, q in (book.get("yes") or [])],
-            no=[(int(p), int(q)) for p, q in (book.get("no") or [])],
-        )
+        """Resting depth on both sides, best price first.
+
+        Kalshi returns this under ``orderbook_fp`` with dollar strings, having
+        previously used ``orderbook`` with integer cents. Reading only the old
+        shape did not fail — it returned an empty book on every call, on a
+        market that plainly had one, so depth simply looked like zero to
+        anything that asked. Both shapes are read.
+
+        The API lists levels cheapest-first on each side; they are reversed
+        here so index 0 is the most aggressive resting order, which is what
+        ``depth_within`` measures against.
+        """
+        payload = self.client.get(f"/markets/{ticker}/orderbook", {"depth": depth})
+        book = payload.get("orderbook_fp") or payload.get("orderbook") or {}
+
+        def levels(*keys) -> list[tuple[int, int]]:
+            for key in keys:
+                rows = book.get(key)
+                if not rows:
+                    continue
+                out = []
+                for price, size in rows:
+                    # Dollars as strings on the _fp shape, whole cents on the
+                    # old one. Both end up as cents.
+                    cents = (round(float(price) * 100) if key.endswith("_dollars")
+                             else int(price))
+                    out.append((cents, int(float(size))))
+                return sorted(out, key=lambda lvl: -lvl[0])
+            return []
+
+        return OrderBook(ticker=ticker, ts=_now(),
+                         yes=levels("yes_dollars", "yes"),
+                         no=levels("no_dollars", "no"))
 
     def get_trades(self, ticker: str, limit: int = 200) -> list[dict]:
         """Recent prints for a market."""

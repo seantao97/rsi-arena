@@ -66,7 +66,9 @@ async def test_the_plugin_agent_needs_no_search_key(agents, llm: LLMClient, fake
 async def test_the_fermi_agent_uses_its_calculator(agents, llm: LLMClient):
     result = await agents["fermi"].run(QUESTIONS["fermi"], llm=llm)
     assert any(s.name == "calculator" for s in result.trace.spans())
-    assert isinstance(result.state["value"], float)
+    # A declared tool answers with structure, so the step writes the whole
+    # ToolOutput.raw_output into state rather than a bare number.
+    assert isinstance(result.state["computed"]["value"], float)
 
 
 async def test_repeated_searches_are_paid_for_once(agents, llm: LLMClient, fake):

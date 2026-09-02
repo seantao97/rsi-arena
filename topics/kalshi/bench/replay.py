@@ -28,7 +28,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from rsi_arena import Toolbox, tool
+from rsi_arena import Tool, ToolOutput, Toolbox
 
 from .. import gamestate as gs
 from ..history import MINUTE, History
@@ -207,46 +207,66 @@ def replay_tools(at: datetime, history: History | None = None) -> Toolbox:
     """
     hist = history or History()
 
-    @tool
-    async def market_quote(ticker: str) -> dict:
-        """The market's quoted state."""
-        candle = hist.quote_at(ticker, at, MINUTE)
-        if candle is None:
-            return {"ticker": ticker, "error": "no quote at that instant"}
-        return {"ticker": ticker, "yes_bid": candle.yes_bid_close,
-                "yes_ask": candle.yes_ask_close, "mid": candle.mid,
-                "spread": candle.spread, "last": candle.last,
-                "volume": candle.volume, "status": "active"}
+    class FrozenQuote(Tool):
+        name = "market_quote"
+        description = "The market's quoted state."
+        parameters = {"type": "object",
+                      "properties": {"ticker": {"type": "string"}},
+                      "required": ["ticker"]}
 
-    @tool
-    async def price_history(ticker: str, hours_back: float = 0.75,
-                            hourly: bool = False) -> list:
-        """Minute bars up to now."""
-        start = at - timedelta(hours=max(0.1, hours_back))
-        return [{"ts": c.ts.isoformat(), "mid": c.mid, "last": c.last,
-                 "volume": c.volume}
-                for c in hist.price_path(ticker, start, at, MINUTE)]
+        def get_tool_output(self, input: dict) -> ToolOutput:
+            candle = hist.quote_at(input["ticker"], at, MINUTE)
+            if candle is None:
+                return ToolOutput.failed("no quote at that instant")
+            out = {"ticker": input["ticker"], "yes_bid": candle.yes_bid_close,
+                   "yes_ask": candle.yes_ask_close, "mid": candle.mid,
+                   "spread": candle.spread, "last": candle.last,
+                   "volume": candle.volume, "status": "active"}
+            return ToolOutput(response=json.dumps(out, default=str), raw_output=out)
 
-    @tool
-    async def recent_trades(ticker: str, limit: int = 12) -> list:
-        """Prints from just before now.
+    class FrozenPath(Tool):
+        name = "candlesticks"
+        description = "Minute bars up to now."
+        parameters = {"type": "object",
+                      "properties": {"ticker": {"type": "string"},
+                                     "hours_back": {"type": "number"},
+                                     "hourly": {"type": "boolean"}},
+                      "required": ["ticker"]}
 
-        Bounded by the API's own ``max_ts`` rather than by filtering what comes
-        back. Kalshi returns trades newest-first over the whole life of a
-        market, so asking for the newest N and trimming afterwards would hand
-        back prints from after the instant being replayed — the exact leak this
-        module exists to prevent.
-        """
-        window_start = at - timedelta(hours=1)
-        recent = hist.trades(ticker, start=window_start, end=at,
-                             max_trades=max(limit, 50))
-        # Same field mapping as the live tool. Different names here would hand
-        # the agent a differently-shaped tape in replay than in production,
-        # which is a benchmark measuring its own plumbing.
-        return [{"ts": t.get("created_time"),
-                 "yes_price": t.get("yes_price_dollars"),
-                 "count": t.get("count_fp"),
-                 "taker_side": t.get("taker_side")}
-                for t in recent[:limit]]
+        def get_tool_output(self, input: dict) -> ToolOutput:
+            start = at - timedelta(hours=max(0.1, float(input.get("hours_back", 0.75))))
+            bars = [{"ts": c.ts.isoformat(), "mid": c.mid, "last": c.last,
+                     "volume": c.volume}
+                    for c in hist.price_path(input["ticker"], start, at, MINUTE)]
+            return ToolOutput(response=json.dumps(bars, default=str),
+                              raw_output={"bars": bars})
 
-    return Toolbox([market_quote, price_history, recent_trades])
+    class FrozenTape(Tool):
+        name = "previous_trades"
+        description = "Prints from just before now."
+        parameters = {"type": "object",
+                      "properties": {"ticker": {"type": "string"},
+                                     "limit": {"type": "integer"}},
+                      "required": ["ticker"]}
+
+        def get_tool_output(self, input: dict) -> ToolOutput:
+            # Bounded by the API's own max_ts rather than by filtering what
+            # comes back. Kalshi returns trades newest-first over the whole
+            # life of a market, so asking for the newest N and trimming
+            # afterwards would hand back prints from after the instant being
+            # replayed — the exact leak this module exists to prevent.
+            limit = int(input.get("limit", 12))
+            recent = hist.trades(input["ticker"], start=at - timedelta(hours=1),
+                                 end=at, max_trades=max(limit, 50))
+            # Same field mapping as the live tool. Different names here would
+            # hand the agent a differently-shaped tape in replay than in
+            # production, which is a benchmark measuring its own plumbing.
+            trades = [{"ts": t.get("created_time"),
+                       "yes_price": t.get("yes_price_dollars"),
+                       "count": t.get("count_fp"),
+                       "taker_side": t.get("taker_side")}
+                      for t in recent[:limit]]
+            return ToolOutput(response=json.dumps(trades, default=str),
+                              raw_output={"trades": trades})
+
+    return Toolbox([FrozenQuote(), FrozenPath(), FrozenTape()])
