@@ -35,6 +35,21 @@ class MarketAtTimeTool(Tool):
         "required": ["ticker", "when"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "asked_for": {"type": "string"},
+            "from": {"type": "string",
+                     "description": "The bar actually used, which may be earlier."},
+            "lag_seconds": {"type": "number"},
+            "mid": {"type": ["number", "null"]},
+            "last": {"type": ["number", "null"]},
+            "volume": {"type": "number"},
+            "two_sided": {"type": "boolean",
+                          "description": "False means an empty book, not a price."},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         ticker, raw = input["ticker"], input["when"]
         try:

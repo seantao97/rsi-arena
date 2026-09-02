@@ -30,6 +30,18 @@ class PriceTheEdgeTool(Tool):
         "required": ["probability", "yes_price"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "breakeven_probability": {"type": "number"},
+            "fee_per_contract": {"type": "number"},
+            "edge_per_contract": {"type": "number"},
+            "kelly_fraction": {"type": "number"},
+            "suggested_stake_usd": {"type": "number"},
+            "worth_taking": {"type": "boolean"},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         prob, price = float(input["probability"]), float(input["yes_price"])
         if not 0 < price < 1 or not 0 <= prob <= 1:

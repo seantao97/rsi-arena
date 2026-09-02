@@ -27,6 +27,22 @@ class EventMarketsTool(Tool):
         "required": ["event_ticker"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "markets": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"ticker": {"type": "string"},
+                               "subtitle": {"type": "string"},
+                               "type": {"type": "string"},
+                               "yes_bid": {"type": ["number", "null"]},
+                               "yes_ask": {"type": ["number", "null"]},
+                               "volume": {"type": "number"}}}},
+            "by_type": {"type": "object",
+                        "description": "Market type to count."},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         event = input["event_ticker"]
         markets = list(DISCOVERY.markets(event_ticker=event))

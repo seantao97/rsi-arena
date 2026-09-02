@@ -30,6 +30,16 @@ class DevigOddsTool(Tool):
         "required": ["american_odds"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "raw": {"type": "array", "items": {"type": "number"}},
+            "fair": {"type": "array", "items": {"type": "number"},
+                     "description": "Sums to one."},
+            "overround": {"type": "number"},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         odds = list(input["american_odds"])
         if len(odds) < 2:

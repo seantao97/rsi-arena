@@ -41,18 +41,29 @@ from .price_the_edge import PriceTheEdgeTool
 from .recent_plays import RecentPlaysTool
 from .settlement import SettlementTool
 from .sportsbook_line import SportsbookLineTool
+from .my_positions import MyPositionsTool
+from .orderbook_imbalance import OrderbookImbalanceTool
+from .settlement_countdown import SettlementCountdownTool
+from .similar_situations import SimilarSituationsTool
+from .spread_ladder import SpreadLadderTool
+from .team_news import TeamNewsTool
+from .time_decay import TimeDecayTool
+from .tradeable_spreads import TradeableSpreadsTool
 from .todays_fixtures import TodaysFixturesTool
 from .trading_fees import TradingFeesTool
 from .unexplained_moves import UnexplainedMovesTool
 from .volume_profile import VolumeProfileTool
+from .web_research import WebResearchTool
 
 REGISTRY: list[type[Tool]] = [
     # what can I bet on
     ActiveLeaguesTool, ListMarketsTool, EventMarketsTool, LiveMarketsTool,
-    MarketRulesTool,
+    MarketRulesTool, TradeableSpreadsTool, SpreadLadderTool,
     # what is it worth
     MarketQuoteTool, OrderBookTool, CandlestickTool, CandlestickProbTool,
     PreviousTradesTool, VolumeProfileTool, MarketAtTimeTool, SettlementTool,
+    OrderbookImbalanceTool, TimeDecayTool, SimilarSituationsTool,
+    SettlementCountdownTool,
     # what is happening in the game
     TodaysFixturesTool, GameStateTool, RecentPlaysTool, GameContextTool,
     SportsbookLineTool, FindGameForMarketTool,
@@ -61,6 +72,10 @@ REGISTRY: list[type[Tool]] = [
     # what a trade costs, and whether it is worth making
     TradingFeesTool, PriceTheEdgeTool, CoherenceCheckTool, DevigOddsTool,
     KalshiVsBookTool,
+    # what the market cannot tell you
+    TeamNewsTool, WebResearchTool,
+    # what am I already holding
+    MyPositionsTool,
 ]
 
 TOOLS: dict[str, Tool] = {cls.name: cls() for cls in REGISTRY}

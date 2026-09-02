@@ -35,6 +35,15 @@ class KalshiVsBookTool(Tool):
         "required": ["kalshi_price", "book_odds"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "kalshi_price": {"type": "number"},
+            "book_fair": {"type": "number"},
+            "difference": {"type": "number"},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         price = float(input["kalshi_price"])
         odds = list(input["book_odds"])

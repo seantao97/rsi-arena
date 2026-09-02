@@ -28,6 +28,16 @@ class VolumeProfileTool(Tool):
         "required": ["ticker"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "profile": {"type": "object",
+                        "description": "Price to contracts traded there."},
+            "total": {"type": "number"},
+            "heaviest_price": {"type": "string"},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         ticker = input["ticker"]
         profile = HISTORY.volume_profile(

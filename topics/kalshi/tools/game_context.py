@@ -26,6 +26,18 @@ class GameContextTool(Tool):
         "required": ["league", "game_id"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "venue": {"type": ["string", "null"]},
+            "attendance": {"type": ["integer", "null"]},
+            "weather": {"type": "object"}, "officials": {"type": "array"},
+            "injuries": {"type": "array"}, "leaders": {"type": "array"},
+            "recent_form": {"type": "object"}, "head_to_head": {"type": "object"},
+            "has_boxscore": {"type": "boolean"},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         d = gs.game_detail(input["league"], input["game_id"])
         out = {"venue": d.venue.get("fullName"), "attendance": d.attendance,

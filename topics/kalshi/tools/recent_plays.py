@@ -28,6 +28,22 @@ class RecentPlaysTool(Tool):
         "required": ["league", "game_id"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "available": {"type": "boolean",
+                          "description": "False for soccer, which publishes none."},
+            "plays": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"ts": {"type": "string"}, "period": {"type": "string"},
+                               "clock": {"type": "string"},
+                               "description": {"type": "string"},
+                               "scoring": {"type": "boolean"}}}},
+            "score": {"type": "string"}, "period": {"type": "string"},
+            "clock": {"type": "string"},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         limit = int(input.get("limit", 12))
         st = gs.game_state(input["league"], input["game_id"], True)

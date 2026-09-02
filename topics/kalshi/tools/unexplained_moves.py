@@ -31,6 +31,18 @@ class UnexplainedMovesTool(Tool):
         "required": ["league", "game_id", "ticker"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "available": {"type": "boolean"}, "count": {"type": "integer"},
+            "moves": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"ts": {"type": "string"},
+                               "from": {"type": "number"}, "to": {"type": "number"},
+                               "move": {"type": "number"}}}},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         league, game_id, ticker = input["league"], input["game_id"], input["ticker"]
         state = gs.game_state(league, game_id, with_plays=True)

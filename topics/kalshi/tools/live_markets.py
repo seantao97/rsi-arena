@@ -33,6 +33,21 @@ class LiveMarketsTool(Tool):
         "required": ["league"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "live_games": {"type": "integer",
+                           "description": "Fixtures in progress, listed or not."},
+            "markets": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"game_id": {"type": "string"},
+                               "score": {"type": "string"},
+                               "period": {"type": "string"},
+                               "clock": {"type": "string"},
+                               "markets": {"type": "array"}}}},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         league = input["league"]
         limit = int(input.get("limit", 20))

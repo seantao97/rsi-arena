@@ -26,6 +26,14 @@ class MarketRulesTool(Tool):
         "required": ["ticker"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "description": "The exchange's rules payload, passed through whole.",
+        "properties": {"rules_primary": {"type": "string"},
+                       "title": {"type": "string"},
+                       "close_time": {"type": "string"}},
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         rules = HISTORY.rules(input["ticker"])
         if not rules:

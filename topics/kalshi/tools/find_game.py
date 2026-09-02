@@ -29,6 +29,16 @@ class FindGameForMarketTool(Tool):
         "required": ["event_ticker", "league"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "game_id": {"type": "string"}, "league": {"type": "string"},
+            "home": {"type": "string"}, "away": {"type": "string"},
+            "confidence": {"type": "number",
+                           "description": "Below 0.6 the match is a guess."},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         event, league = input["event_ticker"], input["league"]
         refs = list(DISCOVERY.whats_bettable(league=league, fixtures_only=True))

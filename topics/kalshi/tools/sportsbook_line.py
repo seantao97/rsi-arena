@@ -28,6 +28,19 @@ class SportsbookLineTool(Tool):
         "required": ["league", "game_id"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "available": {"type": "boolean"},
+            "provider": {"type": "string"},
+            "home_fair": {"type": "number"}, "away_fair": {"type": "number"},
+            "draw_fair": {"type": "number"},
+            "spread": {"type": "number", "description": "The handicap, not a rate."},
+            "total": {"type": "number", "description": "The goal line, not a rate."},
+            "overround": {"type": "number"},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         league = input["league"]
         detail = gs.game_detail(league, input["game_id"])

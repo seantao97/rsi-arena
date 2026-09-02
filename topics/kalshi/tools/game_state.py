@@ -25,6 +25,18 @@ class GameStateTool(Tool):
         "required": ["league", "game_id"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string",
+                       "enum": ["scheduled", "in_progress", "final"]},
+            "home": {"type": "string"}, "away": {"type": "string"},
+            "home_score": {"type": "integer"}, "away_score": {"type": "integer"},
+            "period": {"type": "string"}, "clock": {"type": "string"},
+            "detail": {"type": "object"},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         st = gs.game_state(input["league"], input["game_id"], False)
         out = {"status": st.status, "home": st.home, "away": st.away,

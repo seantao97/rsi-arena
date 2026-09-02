@@ -27,6 +27,20 @@ class CoherenceCheckTool(Tool):
         "required": ["event_ticker"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "violations": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"kind": {"type": "string"},
+                               "tickers": {"type": "array"},
+                               "detail": {"type": "string"},
+                               "net_per_contract": {"type": "number"},
+                               "size": {"type": "number"},
+                               "value_usd": {"type": "number"}}}},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         event = input["event_ticker"]
         rows = [{"kind": v.kind, "tickers": v.tickers, "detail": v.detail,

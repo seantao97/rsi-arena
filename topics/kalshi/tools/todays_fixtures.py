@@ -27,6 +27,19 @@ class TodaysFixturesTool(Tool):
         "required": ["league"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "games": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "home": {"type": "string"},
+                               "away": {"type": "string"}, "start": {"type": "string"}}}},
+            "dates": {"type": "array", "items": {"type": "string"},
+                      "description": "Read these: a quiet day answers with the "
+                                     "next round."},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         league = input["league"]
         games = gs.todays_games(league, input.get("date"))

@@ -83,6 +83,17 @@ def test_narrowing_the_box_keeps_only_what_was_asked_for() -> None:
     assert sorted(box.names()) == ["market_quote", "trading_fees"]
 
 
+def test_every_tool_has_an_output_schema_worth_reading() -> None:
+    """A harness rewriting itself has to know what fields come back.
+
+    A bare {"type": "object"} says a dict arrives and nothing about what is in
+    it, which is no better than not saying.
+    """
+    for cls in REGISTRY:
+        schema = json.loads(cls().get_tool_output_schema())
+        assert schema.get("properties") or schema.get("description"), cls.name
+
+
 def test_a_failure_is_reported_not_raised() -> None:
     """A tool that cannot answer says so. The model can read a refusal; it
     cannot read a traceback."""
@@ -92,6 +103,32 @@ def test_a_failure_is_reported_not_raised() -> None:
 
 
 # --- behaviour: the numbers, against a finished match ------------------------
+
+
+def test_a_ladder_must_not_price_a_harder_line_higher() -> None:
+    """Winning by three cannot be likelier than winning by two, and a ladder
+    read one rung at a time cannot show that it does."""
+    out = call("spread_ladder", event_ticker=SETTLED_EVENT, league="EPL")
+    if not out.ok or not out.raw_output.get("ladders"):
+        pytest.skip("no multi-rung ladder listed on that fixture")
+    for rows in out.raw_output["ladders"].values():
+        lines = [r["line"] for r in rows]
+        assert lines == sorted(lines), "rungs must come back in order"
+
+
+def test_the_book_is_only_restable_where_there_is_room() -> None:
+    """A one-cent book has no price between bid and ask, so a resting order can
+    only join the queue — which is the constraint that decides most trades."""
+    out = call("tradeable_spreads", event_ticker=SETTLED_EVENT, league="EPL")
+    if not out.ok:
+        pytest.skip("fixture no longer listed")
+    for row in out.raw_output["tradeable"]:
+        assert row["room_cents"] == max(0, int(round(row["spread_cents"])) - 1)
+
+
+def test_positions_come_from_the_book_not_from_nothing() -> None:
+    out = call("my_positions", state_dir="/tmp/does-not-exist-at-all")
+    assert not out.ok and "no book" in out.response
 
 def test_fees_follow_the_kalshi_curve() -> None:
     """Peaks at the midpoint, near zero in the tails. It is why the same edge

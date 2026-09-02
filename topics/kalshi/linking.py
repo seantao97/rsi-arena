@@ -336,6 +336,10 @@ def match_event_to_game(fixture: Fixture, games: list[dict],
     )
 
 
+#: A fixture segment is a date then two team codes: 26AUG24BFCLAZ.
+_DATED = re.compile(r"^\d{2}[A-Z]{3}\d{2}[A-Z0-9]+$")
+
+
 def fixture_key(ticker: str) -> str:
     """Which match a market belongs to, across every kind of bet on it.
 
@@ -347,16 +351,22 @@ def fixture_key(ticker: str) -> str:
     slot a supervisor has.
 
     The middle segment is the fixture — a date and two team codes — and is the
-    same across all of them.
+    same across all of them. An event ticker has no outcome on the end and is
+    keyed the same way, so a caller holding either can ask about the match.
 
-        KXSERIEAGAME-26AUG24BFCLAZ-BFC    -> 26AUG24BFCLAZ
+        KXSERIEAGAME-26AUG24BFCLAZ-BFC      -> 26AUG24BFCLAZ
         KXSERIEA1HSPREAD-26AUG24BFCLAZ-LAZ2 -> 26AUG24BFCLAZ
+        KXSERIEAGAME-26AUG24BFCLAZ          -> 26AUG24BFCLAZ
+        KXNFLWINS-KC                        -> KXNFLWINS   (not a fixture)
     """
     parts = ticker.split("-")
-    if len(parts) < 3:
-        # Not a fixture market. Its own event is the best key available.
-        return ticker.rsplit("-", 1)[0]
-    return "-".join(parts[1:-1])
+    if len(parts) >= 3:
+        return "-".join(parts[1:-1])
+    if len(parts) == 2 and _DATED.match(parts[1]):
+        # An event ticker: SERIES-DATETEAMS, with nothing after it.
+        return parts[1]
+    # Not a fixture market at all. Its own series is the best key available.
+    return ticker.rsplit("-", 1)[0]
 
 
 def team_names(client: KalshiClient, event_ticker: str) -> dict[str, str]:

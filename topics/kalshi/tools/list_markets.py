@@ -29,6 +29,25 @@ class ListMarketsTool(Tool):
         "required": ["league"],
     }
 
+    output_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "markets": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"ticker": {"type": "string"},
+                               "event": {"type": "string"},
+                               "title": {"type": "string"},
+                               "subtitle": {"type": "string"},
+                               "type": {"type": "string"},
+                               "yes_bid": {"type": ["number", "null"]},
+                               "yes_ask": {"type": ["number", "null"]},
+                               "volume": {"type": "number"},
+                               "close_time": {"type": ["string", "null"]}}}},
+            "total": {"type": "integer", "description": "Before the limit."},
+            "events": {"type": "integer", "description": "Distinct fixtures."},
+        },
+    }
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         league = input["league"]
         limit = int(input.get("limit", 25))

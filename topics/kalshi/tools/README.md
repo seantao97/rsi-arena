@@ -1,6 +1,6 @@
 # The Kalshi primitive set
 
-Twenty-six tools, one class to a file. Each is a
+Thirty-five tools, one class to a file. Each is a
 [`Tool`](../../../rsi_arena/agent/tools.py) subclass: a name, a version, a
 description written for a model that has to choose between all of them, a
 schema for what goes in and one for what comes out, and a single method that
@@ -63,6 +63,8 @@ traceback.
 | `list_markets` | open fixture markets for one league |
 | `event_markets` | every market on one fixture: outcomes, spreads, totals, halves |
 | `live_markets` | contracts on matches in progress, grouped by match with score and clock |
+| `tradeable_spreads` | every book on a fixture ranked by width — where an order can rest |
+| `spread_ladder` | the handicap and total ladders in order, with the step between rungs |
 | `market_rules` | what actually settles a contract |
 
 ### What is it worth
@@ -77,6 +79,10 @@ traceback.
 | `volume_profile` | contracts traded at each price |
 | `market_at_time` | the quote as it stood at a past instant |
 | `market_settlement` | how it resolved, the closing quote, and CLV on an entry |
+| `orderbook_imbalance` | how lopsided the resting size is, overall and near the touch |
+| `time_decay` | this contract's own drift as the match clock has run down |
+| `similar_situations` | settled contracts priced near this one at the same stage, and what they did |
+| `settlement_countdown` | how long it has, and what actually decides it |
 
 ### What is happening in the game
 
@@ -100,6 +106,25 @@ traceback.
 | `coherence_check` | prices on one fixture that cannot all be right |
 | `devig_odds` | American odds into probabilities summing to one |
 | `kalshi_vs_book` | the exchange against the sportsbook |
+
+### What the market cannot tell you
+
+| tool | answers |
+|---|---|
+| `team_news` | recent reporting on a team or player — injuries, suspensions, team sheets |
+| `web_research` | one specific question the exchange and the feed do not cover |
+
+Both need `SEARCHAPI_API_KEY`; without it they say so rather than failing. Both
+are pre-match tools: reporting lags a live market by minutes at best.
+
+### What am I holding
+
+| tool | answers |
+|---|---|
+| `my_positions` | open positions, their cost, and their mark against the live book |
+
+Reads the supervisor's own book. Until this existed the agent was being asked
+whether to close a position it could not see.
 
 ## Two things the coverage will not tell you
 
