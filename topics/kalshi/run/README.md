@@ -72,15 +72,30 @@ far has swung tens of percent before settling.
 
 ## Scheduled
 
-`workflow.yml` is a GitHub Actions workflow. Copy it into a **private**
-repository with `OPENROUTER_API_KEY` set as a repository secret; it checks this
-repository out at `main` and runs the agent from it, so the scheduled job never
-drifts from what is on the branch and holds no code of its own.
+`workflow.yml` is a GitHub Actions workflow. It wants `OPENROUTER_API_KEY` as
+a repository secret, and it checks this repository out at `main` and runs the
+agent from it, so the scheduled job never drifts from what is on the branch and
+holds no code of its own. As written it lives in a separate repository; see
+below for why, and for when it should not.
 
-It must be a separate repository, and private:
+A separate repository is not the only option, and the reason is narrower than
+it looks. What cannot go near a public repository is a key *in the tree* — a
+literal in a file, a default in a workflow. A repository **secret** is a
+different thing: encrypted, redacted from logs, and withheld from fork pull
+requests, so it is as safe in a public repository as a private one.
 
-- this one is public, and an API key cannot go near it
-- a workflow here would run under Sean's repository, which has no such secret
+So the fork in the road is about who owns the repository, not about secrecy:
+
+- **Here, in the arena repository.** Standard runners are free for public
+  repositories with no minute allowance to run out, which removes the failure
+  described below entirely. Needs Sean to set `OPENROUTER_API_KEY` on his own
+  repository — only an admin can — and the run logs become world-readable.
+- **A separate private repository**, as set up here: anyone can stand it up
+  without waiting on an admin, and the logs stay private. Pays for it in
+  Actions minutes.
+
+The workflow checks this repository out either way. Running it from inside the
+arena would drop that checkout step, since it would already be there.
 
 ### Three things learned by running it
 
