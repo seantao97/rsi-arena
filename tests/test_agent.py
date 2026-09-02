@@ -27,7 +27,7 @@ def pipeline_agent(config: AgentConfig, toolbox) -> Agent:
         plan=Plan(steps=[
             ToolStep(name="count", tool="word_count", args={"text": "{{question}}"},
                      output_key="n"),
-            LoopStep(name="refine", max_loops=3, until="n >= 1", steps=[
+            LoopStep(name="refine", max_loops=3, until="n.count >= 1", steps=[
                 PromptStep(name="think", prompt="Refine: {{question}}", output_key="thought"),
             ]),
             PromptStep(name="write", prompt="Write up {{thought}}", output_key="memo"),
@@ -70,7 +70,8 @@ async def test_a_run_produces_answer_state_trace_and_ledger(pipeline_agent: Agen
     result = await pipeline_agent.run("one two three", llm=llm)
     assert result.ok and result.error is None and result.error_kind is None
     assert isinstance(result.output, str) and result.output
-    assert result.state["n"] == 3 and result.state["memo"] == result.output
+    assert result.state["n"] == {"count": 3}
+    assert result.state["memo"] == result.output
     assert result.cost_usd > 0
     assert {s.name for s in result.trace.spans()} >= {"count", "refine", "write"}
 

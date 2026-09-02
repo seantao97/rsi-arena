@@ -1,4 +1,4 @@
-"""Checks every tool keeps the contract the agent relies on.
+"""``topics.kalshi.tools`` — every primitive, and the contract behind it.
 
 Two kinds here, and the split matters. The contract tests are structural — they
 hold for every tool, need no network, and would have caught a badly declared
@@ -16,16 +16,24 @@ import json
 
 import pytest
 
-from rsi_arena.agent.tool import Tool, ToolOutput
+from rsi_arena import Tool, ToolOutput
 
 from . import REGISTRY, TOOLS, kalshi_tools
+
+
+# --- helpers -----------------------------------------------------------------
+
+
+def call(name: str, **kwargs):
+    """A declared tool answers synchronously through get_tool_output."""
+    return TOOLS[name].get_tool_output(kwargs)
 
 SETTLED_EVENT = "KXEPLGAME-26AUG23NEWLFC"
 SETTLED_TICKER = "KXEPLGAME-26AUG23NEWLFC-NEW"
 FINISHED_GAME = ("EPL", "401879319")
 
 
-# ---------- contract: true of every tool, no network ----------
+# --- the contract: true of every tool, no network ----------------------------
 
 @pytest.mark.parametrize("cls", REGISTRY, ids=lambda c: c.name)
 def test_every_tool_declares_itself(cls: type[Tool]) -> None:
@@ -67,7 +75,7 @@ def test_the_registry_becomes_a_toolbox() -> None:
         assert schema["parameters"]["type"] == "object"
     # The version is visible to the model, so a trace records which revision
     # of a tool a harness was written against.
-    assert "(v1)" in box.get("market_quote").description
+    assert "(v1)" in box.get("market_quote").described()
 
 
 def test_narrowing_the_box_keeps_only_what_was_asked_for() -> None:
@@ -78,18 +86,18 @@ def test_narrowing_the_box_keeps_only_what_was_asked_for() -> None:
 def test_a_failure_is_reported_not_raised() -> None:
     """A tool that cannot answer says so. The model can read a refusal; it
     cannot read a traceback."""
-    out = TOOLS["trading_fees"](price=1.4)
+    out = call("trading_fees", price=1.4)
     assert not out.ok and "outside" in out.response
-    assert TOOLS["price_the_edge"](probability=0.5, yes_price=0.0).ok is False
+    assert call("price_the_edge", probability=0.5, yes_price=0.0).ok is False
 
 
-# ---------- behaviour: the numbers, against a finished match ----------
+# --- behaviour: the numbers, against a finished match ------------------------
 
 def test_fees_follow_the_kalshi_curve() -> None:
     """Peaks at the midpoint, near zero in the tails. It is why the same edge
     is worth taking at 0.05 and not at 0.50."""
-    mid = TOOLS["trading_fees"](price=0.50).raw_output
-    tail = TOOLS["trading_fees"](price=0.03).raw_output
+    mid = call("trading_fees", price=0.50).raw_output
+    tail = call("trading_fees", price=0.03).raw_output
     assert mid["taker_fee"] > tail["taker_fee"]
     assert mid["maker_fee"] == pytest.approx(mid["taker_fee"] * 0.25)
     # A round trip costs twice one leg, which is the number that decides a
@@ -99,21 +107,21 @@ def test_fees_follow_the_kalshi_curve() -> None:
 
 
 def test_the_edge_survives_or_does_not() -> None:
-    worth = TOOLS["price_the_edge"](probability=0.90, yes_price=0.80).raw_output
-    thin = TOOLS["price_the_edge"](probability=0.52, yes_price=0.50).raw_output
+    worth = call("price_the_edge", probability=0.90, yes_price=0.80).raw_output
+    thin = call("price_the_edge", probability=0.52, yes_price=0.50).raw_output
     assert worth["worth_taking"] and worth["suggested_stake_usd"] > 0
     assert not thin["worth_taking"], "a 2c edge at midprice is eaten by the fee"
 
 
 def test_devig_sums_to_one_and_needs_every_outcome() -> None:
-    out = TOOLS["devig_odds"](american_odds=[-150, 320, 260]).raw_output
+    out = call("devig_odds", american_odds=[-150, 320, 260]).raw_output
     assert sum(out["fair"]) == pytest.approx(1.0, abs=1e-6)
     assert out["overround"] > 0, "a real book carries margin"
-    assert not TOOLS["devig_odds"](american_odds=[-150]).ok
+    assert not call("devig_odds", american_odds=[-150]).ok
 
 
 def test_candlesticks_read_a_finished_market() -> None:
-    out = TOOLS["candlesticks"](ticker=SETTLED_TICKER, hours_back=300, hourly=True)
+    out = call("candlesticks", ticker=SETTLED_TICKER, hours_back=300, hourly=True)
     assert out.ok, out.response
     bars = out.raw_output["bars"]
     assert len(bars) > 10
@@ -125,15 +133,15 @@ def test_candlesticks_read_a_finished_market() -> None:
 
 def test_probabilities_are_devigged_not_raw() -> None:
     """A contract's mid is not a probability — the outcomes overround."""
-    out = TOOLS["candlestick_probabilities"](event_ticker=SETTLED_EVENT,
-                                             hours_back=300, hourly=True)
+    out = call("candlestick_probabilities", event_ticker=SETTLED_EVENT,
+               hours_back=300, hourly=True)
     if not out.ok:
         pytest.skip("settled event no longer quotes both sides")
     assert sum(out.raw_output["now"].values()) == pytest.approx(1.0, abs=1e-3)
 
 
 def test_the_tape_reports_prints_not_quotes() -> None:
-    out = TOOLS["previous_trades"](ticker=SETTLED_TICKER, limit=10)
+    out = call("previous_trades", ticker=SETTLED_TICKER, limit=10)
     assert out.ok, out.response
     trades = out.raw_output["trades"]
     assert trades and all(t["ts"] for t in trades)
@@ -144,9 +152,9 @@ def test_the_book_is_read_best_first() -> None:
     """Kalshi lists levels cheapest-first and returns them under a key that
     changed; reading only the old shape gave an empty book on a market that
     plainly had one."""
-    quoted = TOOLS["market_quote"](ticker=SETTLED_TICKER)
+    quoted = call("market_quote", ticker=SETTLED_TICKER)
     assert quoted.ok
-    box = TOOLS["order_book"](ticker=SETTLED_TICKER, depth=5)
+    box = call("order_book", ticker=SETTLED_TICKER, depth=5)
     if not box.ok:
         pytest.skip("settled market has no resting orders")
     yes = box.raw_output["yes"]
@@ -154,7 +162,7 @@ def test_the_book_is_read_best_first() -> None:
 
 
 def test_a_market_resolves_to_its_fixture() -> None:
-    out = TOOLS["find_game_for_market"](event_ticker=SETTLED_EVENT, league="EPL")
+    out = call("find_game_for_market", event_ticker=SETTLED_EVENT, league="EPL")
     assert out.ok, out.response
     assert out.raw_output["game_id"] == FINISHED_GAME[1]
     assert out.raw_output["confidence"] >= 0.6
@@ -162,7 +170,7 @@ def test_a_market_resolves_to_its_fixture() -> None:
 
 def test_the_score_is_the_score() -> None:
     league, game_id = FINISHED_GAME
-    out = TOOLS["game_state"](league=league, game_id=game_id)
+    out = call("game_state", league=league, game_id=game_id)
     assert out.ok
     state = out.raw_output
     assert state["status"] == "final"
@@ -174,7 +182,7 @@ def test_soccer_has_no_play_by_play_and_says_so() -> None:
     a soccer fixture in progress publishes no plays, so in-play work is score
     and clock only. The tool returns the state rather than an error."""
     league, game_id = FINISHED_GAME
-    out = TOOLS["recent_plays"](league=league, game_id=game_id)
+    out = call("recent_plays", league=league, game_id=game_id)
     assert out.ok
     if not out.raw_output.get("available"):
         assert "score" in out.raw_output

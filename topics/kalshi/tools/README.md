@@ -1,7 +1,7 @@
 # The Kalshi primitive set
 
 Twenty-six tools, one class to a file. Each is a
-[`Tool`](../../../rsi_arena/agent/tool.py) subclass: a name, a version, a
+[`Tool`](../../../rsi_arena/agent/tools.py) subclass: a name, a version, a
 description written for a model that has to choose between all of them, a
 schema for what goes in and one for what comes out, and a single method that
 answers.
@@ -15,11 +15,15 @@ things it reads.
 ```python
 from topics.kalshi.tools import TOOLS, kalshi_tools
 
-TOOLS["market_quote"](ticker="KXEPLGAME-26AUG23NEWLFC-NEW")   # directly
-await TOOLS["market_quote"].acall(ticker="...")               # off the loop
+# the structure, for code
+TOOLS["market_quote"].get_tool_output({"ticker": "KXEPLGAME-26AUG23NEWLFC-NEW"})
+await TOOLS["market_quote"].aget_tool_output(ticker="...")   # same, off the loop
 
-agent = Agent(..., tools=kalshi_tools())                      # all of them
-agent = Agent(..., tools=kalshi_tools(["market_quote",        # only these
+# the sentence, for a model — this is what a ToolStep and a PromptStep call
+await TOOLS["market_quote"](ticker="...")                    # -> ToolResult
+
+agent = Agent(..., tools=kalshi_tools())                     # all of them
+agent = Agent(..., tools=kalshi_tools(["market_quote",       # only these
                                        "candlesticks",
                                        "previous_trades"]))
 ```
@@ -39,9 +43,11 @@ Every tool returns a `ToolOutput` with three views of the same answer:
 | `raw_output` | the structured result, safe for code to index |
 | `raw_api_data` | what the upstream service actually sent, where it is worth keeping |
 
-Only `response` reaches the model. A quote is more useful to it as
+A `ToolResult` carries both: `output` is the structure a pipeline step writes
+into run state, and `for_model()` returns the sentence. They are separate
+because they are read by different things — a quote is more useful to a model as
 `"0.34/0.36, mid 0.350, spread 2c"` than as the JSON those numbers came from,
-and the structured form stays in the trace either way.
+while the next step in a plan wants the field it can index.
 
 A tool that cannot answer returns `ToolOutput.failed(...)` rather than raising.
 The model can read a refusal and try different arguments; it cannot read a

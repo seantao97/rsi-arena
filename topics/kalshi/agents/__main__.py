@@ -107,7 +107,7 @@ async def watch(ticker: str, league: str, agent_name: str, config,
     """Re-forecast a live contract whenever the game or the price moves."""
 
     event = ticker.rsplit("-", 1)[0]
-    located = await TOOLS["find_game_for_market"].acall(
+    located = await TOOLS["find_game_for_market"].aget_tool_output(
         event_ticker=event, league=league)
     if not located.ok or "game_id" not in located.raw_output:
         emit(f"could not link {event} to a fixture: {located.response}",

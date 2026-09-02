@@ -60,7 +60,7 @@ async def check_fixture_feed(leagues: list[str]) -> bool:
         if not live:
             continue
         live_total += len(live)
-        found = await TOOLS["live_markets"].acall(league=league, limit=3)
+        found = await TOOLS["live_markets"].aget_tool_output(league=league, limit=3)
         linked = len(found.raw_output.get("markets", []))
         linked_total += linked
         print(f"  linked    {league}: "
@@ -93,7 +93,7 @@ async def main() -> int:
                (sys.argv[1] if len(sys.argv) > 1 else "EPL").split(",") if x.strip()]
     quoted: list[dict] = []
     for league in leagues:
-        found = await TOOLS["list_markets"].acall(league=league, limit=10)
+        found = await TOOLS["list_markets"].aget_tool_output(league=league, limit=10)
         markets = found.raw_output.get("markets", [])
         quoted = [m for m in markets if m.get("yes_bid") and m.get("yes_ask")]
         if quoted:

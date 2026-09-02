@@ -1,4 +1,4 @@
-"""Checks the supervisor is importable and its book-keeping adds up.
+"""``topics.kalshi.agents.supervisor`` — that it loads, and that the book adds up.
 
 The first of these exists because a misplaced import shipped to main. Every
 test at the time covered horizon.py and the benchmark; none of them imported
@@ -18,6 +18,9 @@ from .supervisor import Supervisor
 def _sup(**kw) -> Supervisor:
     return Supervisor(["SERIEA"], mode="horizon", discover=True,
                       state_dir="/tmp/kalshi-test-sup", **kw)
+
+
+# --- it loads at all ----------------------------------------------------------
 
 
 def test_the_supervisor_imports_and_builds() -> None:
@@ -44,6 +47,9 @@ def test_slots_are_capped_per_match_not_per_market_type() -> None:
     assert fixture_key("KXSERIEAGAME-26AUG24INTMIL-INT") != fixture_key(same_match[0])
     # And something that is not a fixture market still gets a usable key.
     assert fixture_key("KXNFLWINS-KC") == "KXNFLWINS"
+
+
+# --- the book -----------------------------------------------------------------
 
 
 def test_a_resting_order_needs_a_print_and_expires() -> None:

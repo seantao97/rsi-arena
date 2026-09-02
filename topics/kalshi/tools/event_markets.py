@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from rsi_arena.agent.tool import Tool, ToolOutput
+from rsi_arena import Tool, ToolOutput
 
 from ._clients import DISCOVERY
 

@@ -29,11 +29,11 @@ from .agent import (
     Step,
     StepContext,
     Tool,
+    ToolOutput,
     ToolResult,
     Toolbox,
     ToolStep,
     api_tool,
-    tool,
 )
 from .api import (
     APIClient,
@@ -98,7 +98,7 @@ __version__ = "0.1.0"
 __all__ = [
     "Agent", "AgentConfig", "AgentResult", "ErrorKind",
     "Plan", "Step", "AnyStep", "PromptStep", "ToolStep", "LoopStep", "StepContext",
-    "Tool", "Toolbox", "ToolResult", "tool", "api_tool",
+    "Tool", "Toolbox", "ToolOutput", "ToolResult", "api_tool",
     "LLMClient", "LLMConfig", "Message", "Completion", "StreamEvent", "WebSearch",
     "Citation", "OpenRouterError",
     "APIClient", "APISpec", "Endpoint", "Param", "APIResponse", "APIError",

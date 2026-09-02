@@ -17,8 +17,7 @@ Adding a primitive is a file and one line in :data:`REGISTRY`.
 
 from __future__ import annotations
 
-from rsi_arena.agent.tool import Tool
-from rsi_arena.agent.tools import Toolbox
+from rsi_arena import Tool, Toolbox
 
 from .active_leagues import ActiveLeaguesTool
 from .candlestick import CandlestickTool
@@ -75,7 +74,7 @@ def kalshi_tools(only: list[str] | None = None) -> Toolbox:
     once a model is rewriting the harness.
     """
     chosen = TOOLS.values() if only is None else [TOOLS[n] for n in only]
-    return Toolbox([t.as_runtime() for t in chosen])
+    return Toolbox(list(chosen))
 
 
 def describe() -> str:

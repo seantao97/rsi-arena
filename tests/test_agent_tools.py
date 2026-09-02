@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+import json
 
 import pytest
 
-from rsi_arena.agent.tools import Tool, Toolbox, api_tool, tool
+from rsi_arena.agent.tools import Tool, ToolOutput, Toolbox, api_tool
 from rsi_arena.api import APIClient, APISpec, Endpoint, NoAuth, Param
 from rsi_arena.core.costs import Cost
 from rsi_arena.core.ratelimit import RateLimit
@@ -25,28 +25,40 @@ def demo_spec() -> APISpec:
     )
 
 
-# --- from a function --------------------------------------------------------
+# --- declared -----------------------------------------------------------------
 
 
-def test_a_schema_is_built_from_the_signature():
-    @tool
-    def lookup(city: Annotated[str, "Which city."], days: int = 3) -> str:
-        """Look something up."""
-        return city
+class Double(Tool):
+    name = "double"
+    description = "Double it."
+    parameters = {"type": "object", "properties": {"n": {"type": "integer"}},
+                  "required": ["n"]}
 
-    assert lookup.name == "lookup" and lookup.description == "Look something up."
+    def get_tool_output(self, input):
+        return ToolOutput(response=str(input["n"] * 2),
+                          raw_output={"value": input["n"] * 2})
+
+
+def test_a_tool_declares_its_own_schema():
+    lookup = Double()
+    assert lookup.name == "double" and lookup.description == "Double it."
     schema = lookup.parameters
-    assert schema["properties"]["city"]["description"] == "Which city."
-    assert schema["properties"]["days"]["type"] == "integer"
-    assert schema["required"] == ["city"], "a defaulted parameter is not required"
+    assert schema["properties"]["n"]["type"] == "integer"
+    assert schema["required"] == ["n"]
+    # The declared schemas also come back as JSON, which is what a config
+    # written by a model reads.
+    assert json.loads(lookup.get_tool_input_schema()) == schema
+    assert json.loads(lookup.get_tool_output_schema())["type"] == "object"
 
 
-def test_the_decorator_takes_arguments_too():
-    @tool(name="wc", description="Counts.", cost_usd=0.01)
-    def word_count(text: str) -> int:
-        return len(text.split())
+def test_the_version_reaches_the_model():
+    """A harness names a tool and the revision it was written against, so a
+    later change of output shape does not silently alter an older harness."""
+    class V2(Double):
+        version = 2
 
-    assert word_count.name == "wc" and word_count.cost_usd == 0.01
+    assert V2().described().endswith("(v2)")
+    assert "(v2)" in V2().to_openai_schema()["function"]["description"]
 
 
 def test_openai_schema_shape(word_count):
@@ -56,37 +68,55 @@ def test_openai_schema_shape(word_count):
 
 async def test_calling_a_tool_returns_its_output(word_count):
     result = await word_count(text="one two three")
-    assert result.ok and result.output == 3 and result.cost.usd == 0.0
+    assert result.ok and result.output == {"count": 3} and result.cost.usd == 0.0
 
 
-async def test_a_sync_function_works_too():
-    @tool
-    def double(n: int) -> int:
-        """Double it."""
-        return n * 2
-
-    assert (await double(n=4)).output == 8
+async def test_the_model_reads_the_sentence_and_code_reads_the_structure():
+    """One body, two callers. Sending the payload to the model as well would
+    spend tokens on data the sentence already summarises."""
+    double = Double()
+    result = await double(n=4)
+    assert result.output == {"value": 8}, "a pipeline step reads the structure"
+    assert result.for_model() == "8", "the model reads the sentence"
+    assert (await double.aget_tool_output(n=4)).raw_output == {"value": 8}
 
 
 async def test_a_failing_tool_is_information_not_a_crash():
-    @tool
-    def explode(x: str) -> str:
-        """Always fails."""
-        raise ValueError("bad argument")
+    class Explode(Tool):
+        name = "explode"
+        description = "Always fails."
+        parameters = {"type": "object", "properties": {"x": {"type": "string"}}}
 
-    result = await explode(x="a")
+        def get_tool_output(self, input):
+            raise ValueError("bad argument")
+
+    result = await Explode()(x="a")
     assert not result.ok and "ValueError: bad argument" in (result.error or "")
     # The model reads this and tries different arguments; only the budget stops it.
     assert result.for_model().startswith("ERROR:")
 
 
-async def test_a_flat_cost_is_charged_per_call():
-    @tool(cost_usd=0.01)
-    def priced(x: str) -> str:
-        """Costs money."""
-        return x
+async def test_a_tool_can_refuse_without_raising():
+    """A refusal is a sentence the model can act on; a traceback is not."""
+    class Refuses(Tool):
+        name = "refuses"
+        description = "Declines."
+        parameters = {"type": "object", "properties": {}}
 
-    assert (await priced(x="a")).cost.usd == 0.01
+        def get_tool_output(self, input):
+            return ToolOutput.failed("no market at that price")
+
+    out = Refuses().get_tool_output({})
+    assert not out.ok and out.response == "unavailable: no market at that price"
+    assert not (await Refuses()()).ok
+
+
+async def test_a_flat_cost_is_charged_per_call():
+    class Priced(Double):
+        name = "priced"
+        cost_usd = 0.01
+
+    assert (await Priced()(n=1)).cost.usd == 0.01
 
 
 async def test_a_result_that_carries_its_own_cost_is_not_double_charged():
@@ -95,8 +125,15 @@ async def test_a_result_that_carries_its_own_cost_is_not_double_charged():
         cost = Cost(usd=0.004, source="fixed")
         cached = False
 
-    tool_obj = Tool("carrier", "d", {"type": "object"}, lambda: Carrier(), cost_usd=99.0)
-    result = await tool_obj()
+    class Carries(Tool):
+        name = "carrier"
+        description = "d"
+        cost_usd = 99.0
+
+        def get_tool_output(self, input):
+            return ToolOutput(response=Carrier())   # type: ignore[arg-type]
+
+    result = await Carries()()
     assert result.output == "payload" and result.cost.usd == 0.004
 
 
@@ -108,13 +145,16 @@ async def test_a_traced_call_produces_a_span_and_a_cost(word_count):
 
 
 async def test_a_traced_failure_marks_the_span_error():
-    @tool
-    def explode(x: str) -> str:
-        """Fails."""
-        raise ValueError("no")
+    class Explode(Tool):
+        name = "explode"
+        description = "Fails."
+        parameters = {"type": "object", "properties": {"x": {"type": "string"}}}
+
+        def get_tool_output(self, input):
+            raise ValueError("no")
 
     tracer = Tracer()
-    await explode(tracer=tracer, x="a")
+    await Explode()(tracer=tracer, x="a")
     assert tracer.root.children[0].status == "error"
 
 
@@ -169,12 +209,11 @@ def test_an_unknown_tool_lists_what_is_there(toolbox: Toolbox):
 
 
 def test_schemas_can_be_narrowed(toolbox: Toolbox):
-    @tool
-    def other(x: str) -> str:
-        """Other."""
-        return x
+    class Other(Double):
+        name = "other"
+        description = "Other."
 
-    toolbox.add(other)
+    toolbox.add(Other())
     assert len(toolbox.schemas()) == 2
     assert [s["function"]["name"] for s in toolbox.schemas(["other"])] == ["other"]
 
@@ -192,4 +231,4 @@ def test_add_api_registers_an_endpoint_as_a_tool(demo_spec: APISpec, api: APICli
 async def test_call_many_runs_independent_calls_together(toolbox: Toolbox):
     results = await toolbox.call_many([("word_count", {"text": "a b"}),
                                        ("word_count", {"text": "a b c"})])
-    assert [r.output for r in results] == [2, 3]
+    assert [r.output for r in results] == [{"count": 2}, {"count": 3}]

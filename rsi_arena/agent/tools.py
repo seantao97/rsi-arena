@@ -1,17 +1,30 @@
 """Tools: typed callables an agent — or a model — can invoke.
 
-A :class:`Tool` is a name, a description, a JSON Schema for its arguments, and
-something to call. Three ways to make one, in ascending order of ceremony:
+A :class:`Tool` is a name, a version, a description, a JSON Schema for its
+arguments and one for its result, and a method that answers. Two ways to make
+one:
 
 .. code-block:: python
 
-    @tool                                   # from a Python function
-    async def word_count(text: str) -> int:
-        \"\"\"Count words in a string.\"\"\"
-        return len(text.split())
+    class WordCount(Tool):                  # declared as a class
+        name = "word_count"
+        version = 2
+        description = "Count words. Whitespace-separated, no tokenising."
+        parameters = {"type": "object",
+                      "properties": {"text": {"type": "string"}},
+                      "required": ["text"]}
+
+        def get_tool_output(self, input: dict) -> ToolOutput:
+            n = len(input["text"].split())
+            return ToolOutput(response=f"{n} words", raw_output={"count": n})
 
     api_tool(SEARCHAPI, "search")           # from a registered API endpoint
-    Tool(name=..., description=..., parameters=..., fn=...)   # by hand
+
+Tools were once built from a function, with the signature becoming the schema
+and the docstring the description. That is right for a one-line primitive and
+wrong as soon as a tool has more to say about itself than a docstring holds —
+which is most of them, once a model is choosing among twenty and has nothing to
+go on but that text.
 
 The same object serves both callers described in the README: a ``ToolStep``
 invokes it directly (fixed pipeline), and a ``PromptStep`` can hand its schema
@@ -25,20 +38,69 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import time
-from typing import Annotated, Any, Callable, get_args, get_origin, get_type_hints
+from typing import Any, Callable
 
-from pydantic import BaseModel, Field, TypeAdapter
+from dataclasses import asdict, dataclass, field
+from pydantic import BaseModel, Field
 
 from ..api import APIClient, APISpec, Endpoint, get_api
 from ..core.costs import Cost
 from ..core.trace import Tracer
 
 
+@dataclass
+class ToolOutput:
+    """What a declared tool returns, in the three forms someone will want it.
+
+    ``response`` is the sentence the model reads. It is written, not dumped —
+    a model choosing its next call is served better by "Chelsea 2-1, 63rd
+    minute, market 0.81/0.83" than by the JSON those numbers came from.
+
+    ``raw_api_data`` is what the upstream service sent, kept whole. It is the
+    difference between a trace that can be re-read later and one that holds
+    only this run's interpretation of the data.
+
+    ``raw_output`` is the structured result: parsed, named, safe to index into.
+    """
+
+    response: str = ""
+    raw_api_data: dict[str, Any] = field(default_factory=dict)
+    raw_output: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def failed(cls, reason: str) -> "ToolOutput":
+        """A tool that cannot answer says so rather than raising.
+
+        The model can read a refusal and try different arguments; it cannot
+        read a traceback.
+        """
+        return cls(response=f"unavailable: {reason}", error=reason)
+
+
 class ToolResult(BaseModel):
+    """One invocation, as both callers need it.
+
+    ``output`` is the structure — what a ``ToolStep`` writes into run state and
+    the next step interpolates. ``response`` is the sentence the model reads.
+    They are separate because they are read by different things: a fixed
+    pipeline wants the list it can index, and a model choosing its next call
+    wants the summary rather than the payload behind it.
+    """
+
     name: str
     args: dict[str, Any] = Field(default_factory=dict)
     output: Any = None
+    response: str = ""
     error: str | None = None
     cached: bool = False
     latency_s: float = 0.0
@@ -52,15 +114,41 @@ class ToolResult(BaseModel):
         """What gets sent back as the ``tool`` message content."""
         if self.error:
             return f"ERROR: {self.error}"
+        if self.response:
+            return self.response
         if isinstance(self.output, str):
             return self.output
-        import json
-
         return json.dumps(self.output, default=str)[:20000]
 
 
 class Tool:
-    """A callable with a schema and a price.
+    """One primitive an agent — or a model — can invoke.
+
+    A tool is declared, not wrapped. Subclass it, set the class attributes,
+    and implement :meth:`get_tool_output`:
+
+    .. code-block:: python
+
+        class WordCount(Tool):
+            name = "word_count"
+            version = 2
+            description = "Count words. Whitespace-separated, no tokenising."
+            parameters = {"type": "object",
+                          "properties": {"text": {"type": "string"}},
+                          "required": ["text"]}
+
+            def get_tool_output(self, input: dict) -> ToolOutput:
+                n = len(input["text"].split())
+                return ToolOutput(response=f"{n} words", raw_output={"count": n})
+
+    Declaring rather than wrapping buys three things a decorated function
+    cannot give. A ``version``, so a harness can name the tool *and* the
+    revision it was written against and a later change of output shape does
+    not silently alter what an older harness meant. A description written for
+    the model rather than for a reader of the source — which matters because a
+    model choosing among twenty primitives has nothing else to go on. And a
+    :class:`ToolOutput`, which separates the sentence the model reads from the
+    structure that code indexes into and the payload the service actually sent.
 
     ``cost_usd`` is a flat per-call charge for tools that cost money but do not
     report it (most vendor APIs). Tools whose underlying call reports its own
@@ -68,20 +156,46 @@ class Tool:
     left at zero so the same money is not counted twice.
     """
 
-    def __init__(
-        self,
-        name: str,
-        description: str,
-        parameters: dict[str, Any],
-        fn: Callable[..., Any],
-        *,
-        cost_usd: float = 0.0,
-    ) -> None:
-        self.name = name
-        self.description = description
-        self.parameters = parameters
-        self.fn = fn
-        self.cost_usd = cost_usd
+    #: Set on the subclass. The model selects on ``name`` and ``description``
+    #: and nothing else, so both are part of the interface.
+    name: str = ""
+    description: str = ""
+
+    #: JSON Schema for the argument object. An empty properties block means the
+    #: tool takes no arguments, which is not the same as taking anything.
+    parameters: dict[str, Any] = {"type": "object", "properties": {}}
+
+    #: JSON Schema for :attr:`ToolOutput.raw_output`. Worth writing when a
+    #: harness is expected to read particular fields back out.
+    output_schema: dict[str, Any] = {"type": "object"}
+
+    #: Bump when the output shape changes.
+    version: int = 1
+    cost_usd: float = 0.0
+
+    # ---------- what a subclass provides ----------
+
+    def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
+        """Answer, synchronously.
+
+        Sync on purpose: a tool body is the easiest thing in the system to
+        write and to test, and the async paths below run it off the event loop
+        so nothing blocks.
+        """
+        raise NotImplementedError(f"{type(self).__name__} implements no get_tool_output")
+
+    # ---------- reading it ----------
+
+    def get_tool_input_schema(self) -> str:
+        return json.dumps(self.parameters)
+
+    def get_tool_output_schema(self) -> str:
+        return json.dumps(self.output_schema)
+
+    def described(self) -> str:
+        """The description the model sees, stamped with the revision."""
+        text = self.description.strip()
+        return f"{text} (v{self.version})" if self.version else text
 
     def to_openai_schema(self) -> dict[str, Any]:
         """The ``tools`` entry OpenRouter expects (OpenAI function format)."""
@@ -89,16 +203,36 @@ class Tool:
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description,
+                "description": self.described(),
                 "parameters": self.parameters,
             },
         }
 
+    # ---------- running it ----------
+
+    async def aget_tool_output(self, input: dict[str, Any] | None = None,
+                               **kwargs: Any) -> ToolOutput:
+        """:meth:`get_tool_output`, off the event loop.
+
+        Two callers want different things from the same body. The model wants
+        the sentence and gets it through :meth:`__call__` as a
+        :class:`ToolResult`; code wants the structure — a game id, a list of
+        markets — and gets the whole :class:`ToolOutput` here.
+        """
+        return await asyncio.to_thread(self.get_tool_output,
+                                       {**(input or {}), **kwargs})
+
     async def __call__(self, tracer: Tracer | None = None, **kwargs: Any) -> ToolResult:
         started = time.monotonic()
+
         async def invoke() -> Any:
-            result = self.fn(**kwargs)
-            return await result if inspect.isawaitable(result) else result
+            out = await self.aget_tool_output(kwargs)
+            # An api_tool answers with the endpoint's own response rather than
+            # a ToolOutput, so that its cost survives the trip; only a
+            # ToolOutput can refuse.
+            if isinstance(out, ToolOutput) and not out.ok:
+                raise RuntimeError(out.error)
+            return out
 
         if tracer is None:
             return await self._run(invoke, kwargs, started, None)
@@ -113,7 +247,8 @@ class Tool:
             return result
 
     async def _run(
-        self, invoke: Callable[[], Any], kwargs: dict[str, Any], started: float, tracer: Tracer | None
+        self, invoke: Callable[[], Any], kwargs: dict[str, Any], started: float,
+        tracer: Tracer | None,
     ) -> ToolResult:
         result = ToolResult(name=self.name, args=kwargs)
         try:
@@ -123,9 +258,18 @@ class Tool:
             # error and try different arguments. Only the step budget stops it.
             result.error = f"{type(exc).__name__}: {exc}"
         else:
+            if isinstance(output, ToolOutput):
+                # The structure goes to code, the sentence to the model. A tool
+                # that only writes a sentence still has to put something in
+                # output, since a pipeline step may read it.
+                result.response = output.response
+                output = output.raw_output or output.response
             result.output, result.cost, result.cached = _unwrap(output, self.cost_usd)
         result.latency_s = time.monotonic() - started
         return result
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(name={self.name!r}, v{self.version})"
 
 
 def _unwrap(output: Any, flat_cost: float) -> tuple[Any, Cost, bool]:
@@ -136,116 +280,68 @@ def _unwrap(output: Any, flat_cost: float) -> tuple[Any, Cost, bool]:
     return output, (Cost.flat(flat_cost) if flat_cost else Cost.free()), False
 
 
-# --- from a Python function -------------------------------------------------
-
-_JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean"}
-
-
-def _schema_from_signature(fn: Callable[..., Any]) -> dict[str, Any]:
-    """Build a parameter schema from annotations.
-
-    ``Annotated[str, "what this is for"]`` puts a description on a parameter,
-    which is worth doing: descriptions are the main thing that stops a model
-    passing the right value to the wrong argument.
-    """
-    signature = inspect.signature(fn)
-    hints = get_type_hints(fn, include_extras=True)
-    properties: dict[str, Any] = {}
-    required: list[str] = []
-    for name, param in signature.parameters.items():
-        if name in {"self", "cls", "tracer"} or param.kind in {
-            param.VAR_POSITIONAL,
-            param.VAR_KEYWORD,
-        }:
-            continue
-        annotation = hints.get(name, str)
-        description = ""
-        if get_origin(annotation) is Annotated:
-            args = get_args(annotation)
-            annotation = args[0]
-            description = next((a for a in args[1:] if isinstance(a, str)), "")
-        if annotation in _JSON_TYPES:
-            schema: dict[str, Any] = {"type": _JSON_TYPES[annotation]}
-        else:
-            try:
-                schema = TypeAdapter(annotation).json_schema()
-            except Exception:  # noqa: BLE001 - unrepresentable annotation
-                schema = {"type": "string"}
-        if description:
-            schema["description"] = description
-        properties[name] = schema
-        if param.default is inspect.Parameter.empty:
-            required.append(name)
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": required,
-        "additionalProperties": False,
-    }
-
-
-def tool(
-    fn: Callable[..., Any] | None = None,
-    *,
-    name: str | None = None,
-    description: str | None = None,
-    cost_usd: float = 0.0,
-) -> Any:
-    """Turn a function into a :class:`Tool`. Usable bare or with arguments."""
-
-    def wrap(func: Callable[..., Any]) -> Tool:
-        return Tool(
-            name=name or func.__name__,
-            description=description or (inspect.getdoc(func) or "").strip(),
-            parameters=_schema_from_signature(func),
-            fn=func,
-            cost_usd=cost_usd,
-        )
-
-    return wrap(fn) if fn is not None else wrap
-
-
-# --- from an API endpoint ---------------------------------------------------
+# --- from a registered API endpoint ------------------------------------------
 
 
 def api_tool(
     api: str | APISpec,
     endpoint: str,
     *,
-    client: APIClient | None = None,
     name: str | None = None,
     description: str | None = None,
+    client: APIClient | None = None,
     fixed: dict[str, Any] | None = None,
 ) -> Tool:
-    """Expose one API endpoint as a tool.
+    """A tool from a registered API endpoint.
 
-    ``fixed`` pins parameters the model should not control — a country code, a
-    result count, an account id. Pinned parameters are removed from the schema
-    so the model never sees them, which is both cheaper and safer than asking
-    it politely not to change them.
+    Returns an instance of a subclass built here, so an endpoint is declared
+    like any other tool and nothing downstream has to know where it came from.
+
+    ``fixed`` pins arguments the model should not choose — an API key, a
+    market the caller has already decided on. Pinned names are removed from the
+    schema, because an argument the model cannot usefully vary is one more
+    thing for it to get wrong.
     """
-    spec = api if isinstance(api, APISpec) else get_api(api)
-    ep: Endpoint = spec.endpoint(endpoint)
+    spec = get_api(api) if isinstance(api, str) else api
+    ep = spec.endpoint(endpoint)
     shared = client or APIClient()
-    pinned = fixed or {}
+    fixed = fixed or {}
 
     schema = ep.schema()
-    if pinned:
+    if fixed:
         schema = {
             **schema,
-            "properties": {k: v for k, v in schema["properties"].items() if k not in pinned},
-            "required": [k for k in schema["required"] if k not in pinned],
+            "properties": {k: v for k, v in schema["properties"].items() if k not in fixed},
+            "required": [k for k in schema["required"] if k not in fixed],
         }
 
-    async def call(**kwargs: Any) -> Any:
-        return await shared.call(spec, ep.name, **{**pinned, **kwargs})
+    class _APITool(Tool):
+        """One endpoint of one API."""
 
-    return Tool(
-        name=name or f"{spec.name}_{ep.name}",
-        description=description or ep.description or f"{spec.name} {ep.name}",
-        parameters=schema,
-        fn=call,
-    )
+    _APITool.name = name or f"{spec.name}_{ep.name}"
+    _APITool.description = description or ep.description or f"{spec.name} {ep.name}"
+    _APITool.parameters = schema
+    _APITool.__name__ = f"{spec.name.title()}{ep.name.title()}Tool"
+
+    def get_tool_output(self: Tool, input: dict[str, Any]) -> ToolOutput:
+        raise NotImplementedError(
+            "an api tool answers through aget_tool_output, which awaits the "
+            "endpoint rather than threading a synchronous body")
+
+    async def aget_tool_output(self: Tool, input: dict[str, Any] | None = None,
+                               **kwargs: Any) -> Any:
+        # The endpoint is already async, so this is the one place a tool body
+        # is written async rather than threaded.
+        # Returned whole rather than repackaged: the response carries its own
+        # cost and cached flag, which _unwrap reads on the way back. Wrapping
+        # the payload here would bury the parsed result a level down and charge
+        # the call twice.
+        args = {**(input or {}), **kwargs}
+        return await shared.call(spec, ep.name, **{**fixed, **args})
+
+    _APITool.get_tool_output = get_tool_output
+    _APITool.aget_tool_output = aget_tool_output
+    return _APITool()
 
 
 # --- collection -------------------------------------------------------------

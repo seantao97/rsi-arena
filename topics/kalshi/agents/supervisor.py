@@ -200,7 +200,7 @@ class Supervisor:
                     # sequence, and none of them come back short — the counts
                     # match what each returns on its own.
                     swept = await asyncio.gather(
-                        *(TOOLS["live_markets"].acall(league=lg, limit=30)
+                        *(TOOLS["live_markets"].aget_tool_output(league=lg, limit=30)
                           for lg in self.leagues),
                         return_exceptions=True)
 
@@ -361,7 +361,7 @@ class Supervisor:
 
         if pos.game_id is None:
             event = pos.ticker.rsplit("-", 1)[0]
-            found = await TOOLS["find_game_for_market"].acall(
+            found = await TOOLS["find_game_for_market"].aget_tool_output(
                 event_ticker=event, league=pos.league)
             data = found.raw_output
             pos.game_id = data.get("game_id")
@@ -431,7 +431,7 @@ class Supervisor:
 
         # The supervisor already knows the fixture, so the game state is passed
         # in rather than rediscovered by a tool-calling loop on every tick.
-        state = await TOOLS["game_state"].acall(
+        state = await TOOLS["game_state"].aget_tool_output(
             league=pos.league, game_id=pos.game_id)
         agent = horizon_agent(self.config, self.tools)
         run = await agent.run(pos.ticker,

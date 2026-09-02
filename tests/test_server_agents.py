@@ -42,7 +42,7 @@ def test_running_one_returns_the_answer_the_ledger_and_the_state(client):
     assert body["agent_id"] == "fermi"
     assert body["text"] and body["text"] == body["output"]
     assert body["summary"]["total_usd"] > 0
-    assert body["state"]["value"], "the calculator step's output should be in state"
+    assert body["state"]["computed"], "the calculator step's output should be in state"
     assert body["error_kind"] is None and body["bailed_out"] is False
 
 
