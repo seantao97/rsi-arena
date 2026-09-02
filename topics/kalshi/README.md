@@ -18,6 +18,38 @@ collector that records the answers at high frequency.
 Credentials are optional — [`credentials.py`](credentials.py) reads the same
 environment variables the other Kalshi tools in this account already use.
 
+## Layout
+
+Five things, and the dependency arrows only point one way:
+
+```
+tools/    the 40 primitives a model may call, and the data layer they wrap
+agents/   JSON configs, one per harness — no Python at all
+run/      everything that drives them: loader, supervisor, trading rule, CLI
+eval/     everything that scores them: replay, verify, validation
+README.md this
+```
+
+`agents/` holding only data is the point rather than tidiness. A config is
+something the arena can diff, version and mutate; once the same file also holds
+the loop that drives it, "the harness changed" stops meaning anything specific.
+So the plan, the prompt and the tool list are JSON, and the loop that keeps them
+forecasting is `run/supervisor.py`.
+
+Inside `tools/`, **a leading underscore means machinery, not a primitive**:
+`_gamestate.py` reaches ESPN, `game_state.py` is the tool that wraps it;
+`_history.py` pulls candlesticks, `candlestick.py` is the tool. `REGISTRY` in
+`tools/__init__.py` is the actual definition of what a tool is — it is written
+by hand, so a helper dropped in the directory is never registered by accident.
+
+Import the data layer through this package rather than reaching past the
+underscore: `from topics.kalshi import History, edge, gamestate`.
+
+The arrows run `tools/ ← run/ ← eval/`. `eval/` reaching into `run/` for
+`quote_from` is the one edge that goes against the grain, and it is deliberate:
+reconstructing what a harness quoted has to use the same arithmetic the harness
+did, or the score measures the reimplementation.
+
 ## Quickstart
 
 ```python
@@ -266,38 +298,31 @@ linking.field_entrants(client, "KXKFTOUR-ADC26")   # 160 entrants
 
 `linking.FIELD_SPORTS` says which sports to route this way.
 
-## Streaming
+## Streaming — removed, and what it cost to learn
 
-[`stream.py`](stream.py) consumes `orderbook_delta` for true tick resolution.
-It maintains the book locally from one snapshot plus deltas, and **drops deltas
-that arrive before a snapshot or out of sequence**, marking the book desynced
-rather than silently serving a wrong one.
+`stream.py` consumed `orderbook_delta` for true tick resolution instead of 1Hz
+polling. It was deleted unused: nothing in `tools/`, `agents/` or `eval/` ever
+called it, and an unused WebSocket client is a liability rather than an option.
 
-```python
-s = KalshiStream(tickers)
-s.on_book = lambda t, b: print(t, b.best_bid, b.best_ask)
-asyncio.run(s.run())
-```
-
-Needs `pip install websockets` and credentials — Kalshi authenticates the socket
-even for public channels. Polling via `recorder.py` needs neither.
-
-The wire format does not match what the schema names suggest, and all four of
-these were found by running it, not by reading docs:
+The wire-format findings are kept because all four were found by running it, not
+by reading the docs, and whoever rebuilds it will otherwise find them again:
 
 - `seq` is at the **top level** of the frame, not inside `msg`
 - snapshot levels are `yes_dollars_fp` / `no_dollars_fp` as `[["0.0100","16.00"]]`
   — dollar strings, not integer cents
 - deltas carry `price_dollars`, `delta_fp`, `side`
 - **`seq` counts per subscription, not per market.** Every market on one `sid`
-  shares the counter, so checking continuity per book reports a desync on
-  almost every delta. It is checked once per frame instead.
+  shares the counter, so checking continuity per book reports a desync on almost
+  every delta. It has to be checked once per frame instead.
+
+Kalshi authenticates the socket even for public channels, so a rebuild needs
+credentials; the polling path in `_history.py` needs none.
 
 ## Known gaps
 
 - **Order book history does not exist.** Candlesticks carry best bid and ask,
   not depth. Historical depth is unavailable at any price; only live depth is,
-  via `stream.py`.
+  and only over the WebSocket that is no longer implemented.
 - **126 series have no derivable league.** Mostly one-off world-soccer
   competitions. They still carry a correct sport and a `SOCCER_OTHER`-style
   generic league, so filtering by sport loses nothing.

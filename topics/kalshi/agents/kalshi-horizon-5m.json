@@ -1,0 +1,126 @@
+{
+  "name": "kalshi-horizon-5m",
+  "description": "Predicts this contract's mid price 5 minutes ahead.",
+  "context": "You forecast the short-term path of a Kalshi sports contract while the match\nis being played.\n\nYou are not asked who wins. You are asked where this contract's mid price will be in a\nfew minutes, which is a narrower and more answerable question.\n\nWhat moves a price on this horizon:\n- the game state changing — a goal, a red card, a period ending\n- time simply passing, which decays any \"will happen\" contract toward no\n- the book being thin, so a single order moves the mid and it drifts back\n- the market still absorbing something that already happened\n\nWhat does not:\n- your view on which team is better. The market has that already.\n\nYou answer with two numbers.\n\n**How many cents it moves.** Not where the price is — where it goes. Zero is a real\nanswer and often the right one; a quiet book with nothing happening does not move.\nBut zero is a decision, not a default, and if the game has just changed you are\nexpected to say so in cents.\n\n**How wide a market you would make.** Half the width of the tightest two-sided quote\nyou would actually stand behind. Two cents means you would buy two under your number\nand sell two over it, and you would honour both sides. Ten cents means you barely\nknow. Quote what you would trade, not what is safe — but a width you cannot defend\nwill be paid for, because the trade goes on at your price and settles at the\nmarket's.",
+  "config": {
+    "default_model": "anthropic/claude-sonnet-4.5",
+    "fallback_models": [],
+    "temperature": null,
+    "top_p": null,
+    "max_tokens": null,
+    "seed": null,
+    "reasoning": null,
+    "provider": null,
+    "timeout_s": 120.0,
+    "cache": true,
+    "cache_ttl_s": null,
+    "web_search": false,
+    "max_usd": 0.2,
+    "max_calls": 200,
+    "requests_per_second": 8.0,
+    "concurrency": 8,
+    "max_spend_mode": false,
+    "bailout_reserve_usd": null,
+    "bailout_model": null,
+    "bailout_max_tokens": 900
+  },
+  "tools": [
+    "market_quote",
+    "candlesticks",
+    "previous_trades"
+  ],
+  "plan": {
+    "steps": [
+      {
+        "type": "tool",
+        "name": "quote",
+        "description": "",
+        "output_key": "quote",
+        "skip_if": null,
+        "tool": "market_quote",
+        "args": {
+          "ticker": "{{question}}"
+        },
+        "fail_ok": true
+      },
+      {
+        "type": "tool",
+        "name": "path",
+        "description": "",
+        "output_key": "path",
+        "skip_if": null,
+        "tool": "candlesticks",
+        "args": {
+          "ticker": "{{question}}",
+          "hours_back": 0.75,
+          "hourly": false
+        },
+        "fail_ok": true
+      },
+      {
+        "type": "tool",
+        "name": "tape",
+        "description": "",
+        "output_key": "tape",
+        "skip_if": null,
+        "tool": "previous_trades",
+        "args": {
+          "ticker": "{{question}}",
+          "limit": 12
+        },
+        "fail_ok": true
+      },
+      {
+        "type": "prompt",
+        "name": "predict",
+        "description": "",
+        "output_key": "prediction",
+        "skip_if": null,
+        "prompt": "Contract: {{question}}\nBook now: {{quote}}\nGame: {{game}}\nMinute bars, last 45m: {{path}}\nRecent prints: {{tape}}\n\nHow many cents does this mid move over the next 5 minutes, and how wide a market would you make around that? Zero cents is a real answer on a quiet book. Quote a width you would actually stand behind on both sides.",
+        "system": null,
+        "model": null,
+        "temperature": null,
+        "max_tokens": null,
+        "tools": [],
+        "tool_choice": null,
+        "max_tool_iterations": 6,
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "delta_cents": {
+              "type": "number",
+              "description": "How many cents the mid will MOVE over the next five minutes. Negative for down, 0 for no move. Do not state a price — state the change."
+            },
+            "half_width_cents": {
+              "type": "number",
+              "description": "Half the width of the tightest two-sided market you would actually stand behind, in cents. This is your quote: you are saying you would buy at (prediction - this) and sell at (prediction + this). Narrow means you will trade; wide means you will not."
+            },
+            "confidence": {
+              "type": "number",
+              "description": "0-1. How sure, given how thin and noisy this book is."
+            },
+            "driver": {
+              "type": "string",
+              "description": "The one thing you expect to move it, or why nothing will."
+            },
+            "falsifier": {
+              "type": "string",
+              "description": "What would show this call was wrong, before settlement."
+            }
+          },
+          "required": [
+            "delta_cents",
+            "half_width_cents",
+            "confidence",
+            "driver",
+            "falsifier"
+          ],
+          "additionalProperties": false
+        },
+        "web_search": false,
+        "memory": false,
+        "stream": false
+      }
+    ]
+  }
+}

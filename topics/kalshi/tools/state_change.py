@@ -6,7 +6,7 @@ from typing import Any
 
 from rsi_arena.agent.tools import Tool, ToolOutput
 
-from .. import gamestate as gs
+from . import _gamestate as gs
 from ._events import NOTABLE, key_events, remember, seconds_since
 
 

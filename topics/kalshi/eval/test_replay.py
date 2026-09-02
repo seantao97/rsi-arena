@@ -1,4 +1,4 @@
-"""``topics.kalshi.bench`` — that the benchmark measures forecasting, not hindsight.
+"""``topics.kalshi.eval`` — that the benchmark measures forecasting, not hindsight.
 
 A replay benchmark has one way to be silently worthless: let something through
 that had not happened yet. Every read is bounded, so every read is checked.
@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from ..history import MINUTE, History
+from .. import MINUTE, History
 from .replay import SCORING_KINDS, replay_tools, timeline
 from .scorer import WindowScore, score_window
 

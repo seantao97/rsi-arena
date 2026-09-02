@@ -22,7 +22,7 @@ from rsi_arena import Tool, Toolbox
 from .active_leagues import ActiveLeaguesTool
 from .candlestick import CandlestickTool
 from .candlestick_prob import CandlestickProbTool
-from .coherence import CoherenceCheckTool
+from .coherence_check import CoherenceCheckTool
 from .devig import DevigOddsTool
 from .event_markets import EventMarketsTool
 from .find_game import FindGameForMarketTool

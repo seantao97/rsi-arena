@@ -237,7 +237,7 @@ def test_soccer_has_no_play_by_play_and_says_so() -> None:
 
 def _state(**over):
     """A GameState with only the fields the in-play tools read."""
-    from .. import gamestate as gs
+    from . import _gamestate as gs
 
     base = dict(game_id="1", league="EPL", status="in_progress",
                 home="Liverpool", away="Newcastle United",

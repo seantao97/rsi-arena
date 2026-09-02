@@ -30,8 +30,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .client import KalshiClient
-from .fees import taker_fee
+from ._client import KalshiClient
+from ._fees import taker_fee
 
 
 @dataclass(frozen=True)

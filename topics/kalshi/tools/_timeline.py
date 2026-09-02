@@ -20,9 +20,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from .client import KalshiClient
-from .gamestate import GameState, Play, game_state
-from .history import MINUTE, Candle, History
+from ._client import KalshiClient
+from ._gamestate import GameState, Play, game_state
+from ._history import MINUTE, Candle, History
 
 
 @dataclass

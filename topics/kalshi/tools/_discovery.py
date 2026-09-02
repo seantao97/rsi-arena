@@ -17,9 +17,9 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Iterable, Iterator
 
-from .client import KalshiClient
-from .linking import is_fixture_event
-from .taxonomy import MarketType, SeriesClass, Sport, classify_series
+from ._client import KalshiClient
+from ._linking import is_fixture_event
+from ._taxonomy import MarketType, SeriesClass, Sport, classify_series
 
 
 @dataclass(frozen=True)

@@ -11,7 +11,7 @@ worth running if it beats that. Everything here is reported against it, and the
 skill number is negative when it is not beaten. Absolute error alone would look
 impressive on a quiet market and mean nothing.
 
-    python -m topics.kalshi.agents.verify --mode horizon --plots
+    python -m topics.kalshi.eval.verify --mode horizon --plots
 """
 
 from __future__ import annotations
@@ -21,9 +21,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from ..fees import maker_fee, taker_fee
-from ..history import MINUTE, History
-from ..linking import fixture_key
+from .. import maker_fee, taker_fee
+from .. import MINUTE, History
+from .. import fixture_key
 
 
 @dataclass

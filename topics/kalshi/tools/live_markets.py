@@ -6,8 +6,8 @@ from typing import Any
 
 from rsi_arena import Tool, ToolOutput
 
-from .. import gamestate as gs
-from ..linking import link_event, names_from_markets
+from . import _gamestate as gs
+from ._linking import link_event, names_from_markets
 from ._clients import CLIENT, DISCOVERY
 
 

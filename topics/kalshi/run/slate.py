@@ -15,7 +15,7 @@ This asks both questions at once and says plainly which answer is which, so an
 empty afternoon can be told apart from a broken one before three hours are spent
 finding out.
 
-    python -m topics.kalshi.agents.slate --league EPL,LALIGA,SERIEA,MLS
+    python -m topics.kalshi.run.slate --league EPL,LALIGA,SERIEA,MLS
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from .. import gamestate as gs
-from ..linking import fixture_key
+from ..tools import _gamestate as gs
+from .. import fixture_key
 from ..tools import TOOLS
 
 

@@ -16,8 +16,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..fees import taker_fee
-from ..history import History
+from .. import taker_fee
+from .. import History
 
 
 @dataclass
@@ -259,7 +259,7 @@ class Paper:
 def paper_trade(report: "Report", bankroll: float = 50_000.0,
                 min_edge: float = 0.02, kelly_fraction: float = 0.25) -> Paper:
     """Trade the agent's probabilities mechanically and see what happens."""
-    from ..fees import kelly
+    from .. import kelly
 
     paper = Paper(bankroll=bankroll, min_edge=min_edge, kelly_fraction=kelly_fraction)
     equity = bankroll

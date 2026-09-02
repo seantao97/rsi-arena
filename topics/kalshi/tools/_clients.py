@@ -10,12 +10,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from ..client import KalshiClient
-from ..coherence import Coherence
-from ..discovery import Discovery
-from ..history import History
-from ..quotes import Quotes
-from ..timeline import Timeline
+from ._client import KalshiClient
+from ._coherence import Coherence
+from ._discovery import Discovery
+from ._history import History
+from ._quotes import Quotes
+from ._timeline import Timeline
 
 CLIENT = KalshiClient()
 DISCOVERY = Discovery(CLIENT)

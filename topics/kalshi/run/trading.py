@@ -1,43 +1,29 @@
-"""Predict where this market will be in five minutes, and trade the difference.
-
-A different task from "what is the true probability". That one competes with a
-market that has watched the same match and usually knows more; this one asks
-only where the price is going next, which is a question the price path, the
-tape and the clock actually bear on.
-
-It is also self-verifying. Five minutes later the answer exists in the
-candlestick history, so every prediction is scored without waiting for the game
-to end — thousands of labelled examples a night instead of one per contract.
-That is the point: the harness that follows is meant to be evolved against data,
-and this is the shape that produces it.
+"""Turning a five-minute price forecast into an action.
 
 **The model predicts; the code decides.** The agent returns a *change* and a
-quote width, and :func:`decide` turns those into an action against the live book
-and the fee schedule. Nothing is left to the model that arithmetic can settle,
-which removes an entire class of defect seen live — a position that contradicted
-the edge the same output reported.
+quote width; :func:`decide` turns those into an action against the live book and
+the fee schedule. Nothing is left to the model that arithmetic can settle, which
+removed an entire class of defect seen live — a position that contradicted the
+edge the same output reported.
 
-Asking for the change rather than the price is not a detail. Two failure modes
-measured over 144 live forecasts both come from asking for a level:
+This is the half of the horizon harness that cannot be a JSON config. The other
+half — the prompt, the plan, the tool list — is
+``agents/kalshi-horizon-5m.json``, and the reasoning behind its shape is in
+``agents/README.md``.
 
-* 63% of forecasts returned the current mid *exactly*. Copying the visible
-  number is the path of least resistance when a level is what is wanted, and it
-  scores zero by construction. Asked for a change, doing nothing costs the model
-  a deliberate ``0``.
-* Both trades the run produced came from misreading the book. One explained a
-  price "already fading back to 0.105" while the market was at 0.295. Because
-  the anchor was the model's own reading, a misreading manufactured an edge out
-  of nothing — and the further off it was, the larger the fake edge, so the fee
+Asking the model for a change rather than a price level is not a detail. Two
+failure modes measured over 144 live forecasts both come from asking for a level:
+
+* 63% of forecasts returned the current mid *exactly*. Copying the visible number
+  is the path of least resistance when a level is what is wanted, and it scores
+  zero by construction. Asked for a change, doing nothing costs the model a
+  deliberate ``0``.
+* Both trades that run produced came from misreading the book. One explained a
+  price "already fading back to 0.105" while the market was at 0.295. Because the
+  anchor was the model's own reading, a misreading manufactured an edge out of
+  nothing — and the further off it was, the larger the fake edge, so the fee
   threshold selected for exactly these. A change is applied by code to the true
   mid, so the anchor can no longer be wrong.
-
-There is exactly **one model call per forecast**. The quote, the price path and
-the tape come from tool steps, which make no model call, and the caller passes
-the game state in — the supervisor already resolved the fixture, so paying a
-tool-calling loop to rediscover it every two minutes bought nothing. Measured
-live, that took a forecast from $0.13 across three calls to $0.018 across one,
-which is the difference between a few dozen scored windows a night and a few
-hundred.
 """
 
 from __future__ import annotations
@@ -45,71 +31,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 
-from rsi_arena import Agent, AgentConfig, Plan, PromptStep, Toolbox, ToolStep
+from .. import maker_fee, taker_fee
 
-from ..fees import maker_fee, taker_fee
-from ..tools import kalshi_tools
-
+#: The horizon the forecast is made over, and scored against.
 HORIZON_MINUTES = 5
-
-CONTEXT = """You forecast the short-term path of a Kalshi sports contract while the match
-is being played.
-
-You are not asked who wins. You are asked where this contract's mid price will be in a
-few minutes, which is a narrower and more answerable question.
-
-What moves a price on this horizon:
-- the game state changing — a goal, a red card, a period ending
-- time simply passing, which decays any "will happen" contract toward no
-- the book being thin, so a single order moves the mid and it drifts back
-- the market still absorbing something that already happened
-
-What does not:
-- your view on which team is better. The market has that already.
-
-You answer with two numbers.
-
-**How many cents it moves.** Not where the price is — where it goes. Zero is a real
-answer and often the right one; a quiet book with nothing happening does not move.
-But zero is a decision, not a default, and if the game has just changed you are
-expected to say so in cents.
-
-**How wide a market you would make.** Half the width of the tightest two-sided quote
-you would actually stand behind. Two cents means you would buy two under your number
-and sell two over it, and you would honour both sides. Ten cents means you barely
-know. Quote what you would trade, not what is safe — but a width you cannot defend
-will be paid for, because the trade goes on at your price and settles at the
-market's."""
-
-PREDICTION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "delta_cents": {
-            "type": "number",
-            "description": ("How many cents the mid will MOVE over the next five "
-                            "minutes. Negative for down, 0 for no move. Do not "
-                            "state a price — state the change."),
-        },
-        "half_width_cents": {
-            "type": "number",
-            "description": ("Half the width of the tightest two-sided market you "
-                            "would actually stand behind, in cents. This is your "
-                            "quote: you are saying you would buy at "
-                            "(prediction - this) and sell at (prediction + this). "
-                            "Narrow means you will trade; wide means you will not."),
-        },
-        "confidence": {"type": "number",
-                       "description": "0-1. How sure, given how thin and noisy this book is."},
-        "driver": {"type": "string",
-                   "description": "The one thing you expect to move it, or why nothing will."},
-        "falsifier": {"type": "string",
-                      "description": "What would show this call was wrong, before settlement."},
-    },
-    "required": ["delta_cents", "half_width_cents", "confidence",
-                 "driver", "falsifier"],
-    "additionalProperties": False,
-}
-
 
 @dataclass(frozen=True)
 class Holding:
@@ -325,64 +250,6 @@ def _make(predicted: float, low: float, high: float, bid: float, ask: float,
                     round(bankroll * fraction, 2),
                     f"{action} resting at {entry:.2f} inside {bid:.2f}/{ask:.2f}, "
                     f"edge {edge:+.4f} after maker fees")
-
-
-def horizon_tools() -> Toolbox:
-    """Just the three tools the plan calls.
-
-    Worth about 70 tokens a forecast against the full nineteen-tool box — the
-    saving is not the point. An agent that cannot reach a tool cannot surprise
-    you by reaching for it, which matters once a model is rewriting this
-    harness.
-    """
-    return kalshi_tools(["market_quote", "candlesticks", "previous_trades"])
-
-
-def horizon_agent(config: AgentConfig | None = None,
-                  tools: Toolbox | None = None,
-                  minutes: int = HORIZON_MINUTES) -> Agent:
-    """Predict the mid price ``minutes`` ahead. Trading is decided in code."""
-    return Agent(
-        name=f"kalshi-horizon-{minutes}m",
-        description=f"Predicts this contract's mid price {minutes} minutes ahead.",
-        context=CONTEXT,
-        tools=tools or horizon_tools(),
-        config=config or AgentConfig(default_model="anthropic/claude-sonnet-4.5",
-                                     max_usd=0.20),
-        plan=Plan(steps=[
-            # Tool steps make no model call, so the quote, the path and the
-            # tape are fetched rather than asked for. The game state is passed
-            # in by the caller — the supervisor already resolved the fixture,
-            # and paying a tool-calling loop to rediscover it every two minutes
-            # bought nothing.
-            ToolStep(name="quote", tool="market_quote",
-                     args={"ticker": "{{question}}"}, output_key="quote",
-                     fail_ok=True),
-            ToolStep(name="path", tool="candlesticks",
-                     args={"ticker": "{{question}}", "hours_back": 0.75,
-                           "hourly": False},
-                     output_key="path", fail_ok=True),
-            ToolStep(name="tape", tool="previous_trades",
-                     args={"ticker": "{{question}}", "limit": 12},
-                     output_key="tape", fail_ok=True),
-            PromptStep(
-                name="predict",
-                prompt=("Contract: {{question}}\n"
-                        "Book now: {{quote}}\n"
-                        "Game: {{game}}\n"
-                        "Minute bars, last 45m: {{path}}\n"
-                        "Recent prints: {{tape}}\n\n"
-                        f"How many cents does this mid move over the next "
-                        f"{minutes} minutes, and how wide a market would you make "
-                        "around that? Zero cents is a real answer on a quiet book. "
-                        "Quote a width you would actually stand behind on both "
-                        "sides."),
-                tools=[],
-                output_schema=PREDICTION_SCHEMA,
-                output_key="prediction",
-            ),
-        ]),
-    )
 
 
 def target_time(minutes: int = HORIZON_MINUTES) -> str:

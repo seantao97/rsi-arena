@@ -152,6 +152,38 @@ soccer is score and clock, and the harnesses here are built around that.
 today.** So seven fixtures across five leagues can mean one match today and
 four in three days' time. `todays_fixtures` returns the dates; read them.
 
+## What is in here besides tools
+
+The data layer sits in this directory too, under a leading underscore. That is
+the whole convention: **no underscore is a primitive, an underscore is
+machinery.**
+
+| file | what it reaches |
+| --- | --- |
+| `_client.py` | Kalshi REST — pagination, rate limiting, retries, auth |
+| `_credentials.py` | locating the signing key |
+| `_discovery.py` | what is bettable — series, events, markets |
+| `_taxonomy.py` | classifying a series into sport / league / market type |
+| `_quotes.py` | price now, or at a past instant |
+| `_history.py` | candlesticks and trades |
+| `_gamestate.py` | ESPN — score, clock, plays, key events |
+| `_linking.py` | joining a Kalshi event to the fixture it is about |
+| `_timeline.py` | game events and price moves on one clock |
+| `_fees.py`, `_implied.py`, `_coherence.py` | arithmetic, no I/O |
+| `_clients.py`, `_events.py`, `_search.py` | shared singletons and helpers |
+
+They live beside the tools rather than a level up because most of them back
+several tools at once — `_gamestate.py` backs fourteen — so there is no single
+tool file they could be folded into.
+
+`REGISTRY` is hand-written, so nothing here is registered by accident. The one
+name to watch is the near-collision: `_coherence.py` is the no-arbitrage
+machinery, `coherence_check.py` is the tool.
+
+Outside this package, import through `topics.kalshi` rather than past the
+underscore — `from topics.kalshi import History, edge`. `agents/` and `eval/`
+both do.
+
 ## Adding one
 
 A file, a class, and one line in `REGISTRY`.

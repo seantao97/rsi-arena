@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from .. import gamestate as gs
-from ..taxonomy import resolve_league
+from . import _gamestate as gs
+from ._taxonomy import resolve_league
 
 #: Every event type that puts a goal on the board. A converted penalty is filed
 #: as its own type, and counting only "goal" loses it.

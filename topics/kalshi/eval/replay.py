@@ -30,9 +30,9 @@ from datetime import datetime, timedelta, timezone
 
 from rsi_arena import Tool, ToolOutput, Toolbox
 
-from .. import gamestate as gs
-from ..history import MINUTE, History
-from ..taxonomy import resolve_league
+from ..tools import _gamestate as gs
+from .. import MINUTE, History
+from .. import resolve_league
 
 HORIZON_MINUTES = 5
 

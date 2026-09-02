@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..fees import breakeven, edge as true_edge
+from .. import breakeven, edge as true_edge
 
 
 @dataclass

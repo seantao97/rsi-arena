@@ -6,7 +6,7 @@ from typing import Any
 
 from rsi_arena import Tool, ToolOutput
 
-from .. import gamestate as gs
+from . import _gamestate as gs
 
 
 class GameContextTool(Tool):

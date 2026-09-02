@@ -6,7 +6,7 @@ from typing import Any
 
 from rsi_arena import Tool, ToolOutput
 
-from ..fees import breakeven, edge, maker_fee, taker_fee
+from ._fees import breakeven, edge, maker_fee, taker_fee
 
 
 class TradingFeesTool(Tool):

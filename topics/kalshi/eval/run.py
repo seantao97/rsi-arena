@@ -11,8 +11,8 @@ makes this useful for the arena rather than only for us: the thing under test
 is JSON, so a model can author the next one without writing code, and the
 benchmark scores it without knowing where it came from.
 
-    python -m topics.kalshi.bench.run --league EPL --game 401879319
-    python -m topics.kalshi.bench.run --spec v2.json --game 401879319 --json
+    python -m topics.kalshi.eval.run --league EPL --game 401879319
+    python -m topics.kalshi.eval.run --spec v2.json --game 401879319 --json
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from rsi_arena import Agent, AgentConfig
 
-from ..history import MINUTE, History
+from .. import MINUTE, History
 from .replay import HORIZON_MINUTES, Timeline, replay_tools, timeline
 from .scorer import WindowScore, score_window
 
@@ -142,8 +142,8 @@ async def run_harness(spec: dict, line: Timeline, tickers: list[str],
 
 def default_spec() -> dict:
     """The harness this benchmark exists to be beaten."""
-    from ..agents.horizon import horizon_agent
-    return horizon_agent(AgentConfig(default_model="anthropic/claude-sonnet-4.5",
+    from ..run.load import load_agent
+    return load_agent("horizon", config=AgentConfig(default_model="anthropic/claude-sonnet-4.5",
                                      max_usd=0.10)).to_dict()
 
 

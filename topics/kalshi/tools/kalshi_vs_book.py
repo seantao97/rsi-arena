@@ -6,7 +6,7 @@ from typing import Any
 
 from rsi_arena import Tool, ToolOutput
 
-from ..implied import kalshi_vs_book
+from ._implied import kalshi_vs_book
 
 
 class KalshiVsBookTool(Tool):

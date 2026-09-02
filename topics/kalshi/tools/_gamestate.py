@@ -32,7 +32,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .taxonomy import COMPETITIONS, resolve_league
+from ._taxonomy import COMPETITIONS, resolve_league
 
 MLB_API = "https://statsapi.mlb.com/api/v1"
 NHL_API = "https://api-web.nhle.com/v1"
@@ -167,7 +167,7 @@ class GameDetail:
         overround means an outcome is missing rather than that the book is
         generous.
         """
-        from .implied import american_to_prob, devig, overround
+        from ._implied import american_to_prob, devig, overround
 
         for line, raw_odds in zip(self.book_lines, self.odds):
             home, away = line["moneyline_home"], line["moneyline_away"]
