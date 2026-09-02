@@ -27,8 +27,8 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
-from .client import KalshiClient
-from .taxonomy import Sport
+from ._client import KalshiClient
+from ._taxonomy import Sport
 
 # Sports priced as a field of entrants, not a two-sided fixture.
 FIELD_SPORTS = {Sport.GOLF, Sport.MOTORSPORT, Sport.OLYMPICS, Sport.CHESS}

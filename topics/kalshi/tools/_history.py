@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 
-from .client import KalshiClient
+from ._client import KalshiClient
 
 MINUTE, HOUR, DAY = 1, 60, 1440
 VALID_INTERVALS = (MINUTE, HOUR, DAY)

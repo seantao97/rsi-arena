@@ -6,7 +6,7 @@ from typing import Any
 
 from rsi_arena import Tool, ToolOutput
 
-from ..fees import clv
+from ._fees import clv
 from ._clients import HISTORY
 
 

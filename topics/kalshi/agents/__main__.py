@@ -42,8 +42,8 @@ def pick_market(league: str) -> str | None:
     ``custom``. ``parse_event_ticker`` is the honest test, because only a
     fixture encodes a date and two team codes.
     """
-    from topics.kalshi.discovery import Discovery
-    from topics.kalshi.linking import parse_event_ticker
+    from topics.kalshi import Discovery
+    from topics.kalshi import parse_event_ticker
 
     candidates = []
     for m in Discovery().whats_bettable(league=league, fixtures_only=True):
@@ -84,7 +84,7 @@ def state_fingerprint(league: str, game_id: str, ticker: str,
     ordinary one-cent noise does not trigger a re-run while a real move does.
     """
     from topics.kalshi import gamestate as gs
-    from topics.kalshi.quotes import Quotes
+    from topics.kalshi import Quotes
 
     st = gs.game_state(league, game_id, with_plays=False)
     q = Quotes().get_market(ticker)

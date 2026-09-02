@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from ..linking import fixture_key
+from .. import fixture_key
 from .horizon import Holding
 from .supervisor import Supervisor
 
@@ -77,7 +77,7 @@ def test_a_second_division_is_not_the_top_flight() -> None:
     36 second-tier markets into the top flight, and the reserve side listed as
     "Real Sociedad B" then claimed the RSO code.
     """
-    from ..taxonomy import match_competition
+    from .. import match_competition
     assert match_competition("LALIGAGAME")[0] == "LALIGA"
     assert match_competition("LALIGA1HTOTAL")[0] == "LALIGA"
     assert match_competition("LALIGA2HSPREAD")[0] == "LALIGA"
@@ -89,7 +89,7 @@ def test_a_second_division_is_not_the_top_flight() -> None:
 def test_the_shortest_name_wins_a_code() -> None:
     """A club is named several ways across a league's series; the bare name is
     the one the fixture feed prints."""
-    from ..linking import names_from_markets
+    from .. import names_from_markets
 
     class Ref:
         def __init__(self, ticker, subtitle):
@@ -110,7 +110,7 @@ def test_a_name_matches_itself() -> None:
     sequence fallback and scored *lower* the longer the name: "Real Madrid"
     against "Real Madrid" came out at 0.455, below the 0.6 linking threshold.
     """
-    from ..linking import _score_match
+    from ..tools._linking import _score_match
     assert _score_match("Real Madrid", "Real Madrid") == 1.0
     assert _score_match("Real Sociedad", "Real Sociedad San Sebastian") >= 0.9
     assert _score_match("Newcastle", "Newcastle United") >= 0.9

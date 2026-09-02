@@ -6,7 +6,7 @@ from typing import Any
 
 from rsi_arena import Tool, ToolOutput
 
-from ..implied import american_to_prob, devig, overround
+from ._implied import american_to_prob, devig, overround
 
 
 class DevigOddsTool(Tool):

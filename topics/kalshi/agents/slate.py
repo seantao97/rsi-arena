@@ -25,8 +25,8 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from .. import gamestate as gs
-from ..linking import fixture_key
+from ..tools import _gamestate as gs
+from .. import fixture_key
 from ..tools import TOOLS
 
 

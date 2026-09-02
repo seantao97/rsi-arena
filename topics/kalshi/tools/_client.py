@@ -88,7 +88,7 @@ class KalshiClient:
     def __post_init__(self) -> None:
         self._limiter = RateLimiter(TIER_READ_BUDGET.get(self.tier, 200))
         if self.key_id is None and self.private_key_pem is None:
-            from .credentials import load
+            from ._credentials import load
             creds = load()
             object.__setattr__(self, "key_id", creds.key_id)
             object.__setattr__(self, "private_key_pem", creds.private_key_pem)

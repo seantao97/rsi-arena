@@ -21,9 +21,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from ..fees import maker_fee, taker_fee
-from ..history import MINUTE, History
-from ..linking import fixture_key
+from .. import maker_fee, taker_fee
+from .. import MINUTE, History
+from .. import fixture_key
 
 
 @dataclass

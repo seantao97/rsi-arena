@@ -25,7 +25,7 @@ from datetime import datetime
 from rsi_arena.evals.scoring import Score, register_scorer
 
 from ..agents.horizon import quote_from
-from ..history import History
+from .. import History
 from .replay import HORIZON_MINUTES, realised_mid
 
 # Below this the two errors are the same number to the tenth of a cent, and a

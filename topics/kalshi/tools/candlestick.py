@@ -6,7 +6,7 @@ from typing import Any
 
 from rsi_arena import Tool, ToolOutput
 
-from ..history import HOUR, MINUTE
+from ._history import HOUR, MINUTE
 from ._clients import HISTORY, hours_ago, now
 
 

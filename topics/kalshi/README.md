@@ -18,6 +18,29 @@ collector that records the answers at high frequency.
 Credentials are optional — [`credentials.py`](credentials.py) reads the same
 environment variables the other Kalshi tools in this account already use.
 
+## Layout
+
+Five things, and the dependency arrows only point one way:
+
+```
+tools/    the 40 primitives a model may call, and the data layer they wrap
+agents/   the harnesses being ranked — they compose tools, never extend them
+eval/     replay scoring: put a harness at a past instant, score what it says
+run/      scheduling and preflight
+README.md this
+```
+
+Inside `tools/`, **a leading underscore means machinery, not a primitive**:
+`_gamestate.py` reaches ESPN, `game_state.py` is the tool that wraps it;
+`_history.py` pulls candlesticks, `candlestick.py` is the tool. `REGISTRY` in
+`tools/__init__.py` is the actual definition of what a tool is — it is written
+by hand, so a helper dropped in the directory is never registered by accident.
+
+Import the data layer through this package rather than reaching past the
+underscore: `from topics.kalshi import History, edge, gamestate`. `agents/` and
+`eval/` both do, which is what keeps `eval` able to score a harness it does not
+depend on.
+
 ## Quickstart
 
 ```python
@@ -266,38 +289,31 @@ linking.field_entrants(client, "KXKFTOUR-ADC26")   # 160 entrants
 
 `linking.FIELD_SPORTS` says which sports to route this way.
 
-## Streaming
+## Streaming — removed, and what it cost to learn
 
-[`stream.py`](stream.py) consumes `orderbook_delta` for true tick resolution.
-It maintains the book locally from one snapshot plus deltas, and **drops deltas
-that arrive before a snapshot or out of sequence**, marking the book desynced
-rather than silently serving a wrong one.
+`stream.py` consumed `orderbook_delta` for true tick resolution instead of 1Hz
+polling. It was deleted unused: nothing in `tools/`, `agents/` or `eval/` ever
+called it, and an unused WebSocket client is a liability rather than an option.
 
-```python
-s = KalshiStream(tickers)
-s.on_book = lambda t, b: print(t, b.best_bid, b.best_ask)
-asyncio.run(s.run())
-```
-
-Needs `pip install websockets` and credentials — Kalshi authenticates the socket
-even for public channels. Polling via `recorder.py` needs neither.
-
-The wire format does not match what the schema names suggest, and all four of
-these were found by running it, not by reading docs:
+The wire-format findings are kept because all four were found by running it, not
+by reading the docs, and whoever rebuilds it will otherwise find them again:
 
 - `seq` is at the **top level** of the frame, not inside `msg`
 - snapshot levels are `yes_dollars_fp` / `no_dollars_fp` as `[["0.0100","16.00"]]`
   — dollar strings, not integer cents
 - deltas carry `price_dollars`, `delta_fp`, `side`
 - **`seq` counts per subscription, not per market.** Every market on one `sid`
-  shares the counter, so checking continuity per book reports a desync on
-  almost every delta. It is checked once per frame instead.
+  shares the counter, so checking continuity per book reports a desync on almost
+  every delta. It has to be checked once per frame instead.
+
+Kalshi authenticates the socket even for public channels, so a rebuild needs
+credentials; the polling path in `_history.py` needs none.
 
 ## Known gaps
 
 - **Order book history does not exist.** Candlesticks carry best bid and ask,
   not depth. Historical depth is unavailable at any price; only live depth is,
-  via `stream.py`.
+  and only over the WebSocket that is no longer implemented.
 - **126 series have no derivable league.** Mostly one-off world-soccer
   competitions. They still carry a correct sport and a `SOCCER_OTHER`-style
   generic league, so filtering by sport loses nothing.

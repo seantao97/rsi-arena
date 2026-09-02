@@ -39,7 +39,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from ..linking import fixture_key
+from .. import fixture_key
 from .agents import AGENTS, default_config
 from ..tools import TOOLS, kalshi_tools
 
@@ -325,7 +325,7 @@ class Supervisor:
 
     async def _tick(self, pos: Position) -> None:
         from . import __main__ as cli
-        from ..history import History
+        from .. import History
 
         # Settlement is checked before linking, and deliberately so. A settled
         # market needs no fixture, and its game has usually rolled off the feed
@@ -425,9 +425,9 @@ class Supervisor:
         """Predict the price five minutes out; let arithmetic decide the trade."""
         from .horizon import (HORIZON_MINUTES, Holding, decide, horizon_agent,
                               quote_from, target_time)
-        from ..fees import maker_fee, taker_fee
+        from .. import maker_fee, taker_fee
         from .validation import validate_horizon
-        from ..quotes import Quotes
+        from .. import Quotes
 
         # The supervisor already knows the fixture, so the game state is passed
         # in rather than rediscovered by a tool-calling loop on every tick.
@@ -569,7 +569,7 @@ class Supervisor:
         """
         from datetime import datetime
 
-        from ..history import MINUTE, History
+        from .. import MINUTE, History
         try:
             placed = datetime.fromisoformat(order["placed_at"])
         except (KeyError, ValueError):

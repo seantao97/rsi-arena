@@ -17,8 +17,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
-from .client import KalshiClient
-from .history import MINUTE, Candle, History
+from ._client import KalshiClient
+from ._history import MINUTE, Candle, History
 
 
 @dataclass(frozen=True)

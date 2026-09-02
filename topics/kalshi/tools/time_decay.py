@@ -7,7 +7,7 @@ from typing import Any
 
 from rsi_arena.agent.tools import Tool, ToolOutput
 
-from ..history import MINUTE
+from ._history import MINUTE
 from ._clients import HISTORY
 
 

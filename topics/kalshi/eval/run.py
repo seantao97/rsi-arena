@@ -11,8 +11,8 @@ makes this useful for the arena rather than only for us: the thing under test
 is JSON, so a model can author the next one without writing code, and the
 benchmark scores it without knowing where it came from.
 
-    python -m topics.kalshi.bench.run --league EPL --game 401879319
-    python -m topics.kalshi.bench.run --spec v2.json --game 401879319 --json
+    python -m topics.kalshi.eval.run --league EPL --game 401879319
+    python -m topics.kalshi.eval.run --spec v2.json --game 401879319 --json
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from rsi_arena import Agent, AgentConfig
 
-from ..history import MINUTE, History
+from .. import MINUTE, History
 from .replay import HORIZON_MINUTES, Timeline, replay_tools, timeline
 from .scorer import WindowScore, score_window
 

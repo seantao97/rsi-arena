@@ -47,7 +47,7 @@ from datetime import datetime, timedelta, timezone
 
 from rsi_arena import Agent, AgentConfig, Plan, PromptStep, Toolbox, ToolStep
 
-from ..fees import maker_fee, taker_fee
+from .. import maker_fee, taker_fee
 from ..tools import kalshi_tools
 
 HORIZON_MINUTES = 5

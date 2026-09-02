@@ -7,7 +7,7 @@ from typing import Any
 
 from rsi_arena.agent.tools import Tool, ToolOutput
 
-from ..linking import fixture_key
+from ._linking import fixture_key
 from ._clients import DISCOVERY
 
 #: Ladders end in the line: NEW2 is Newcastle by 2+, TOTAL-4 is over 4.
