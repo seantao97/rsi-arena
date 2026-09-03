@@ -2,7 +2,7 @@
 
 **This directory holds JSON and nothing else.** Each file is one agent: its
 name, its context, its model settings, the tool names its plan may call, and the
-plan itself. Every line of Python that runs them is in [`../run/`](../run/), and
+plan itself. Every line of Python that runs them is in [`../eval/`](../eval/), and
 everything that scores them is in [`../eval/`](../eval/).
 
 The split is what makes a harness comparable. A config is data the arena can
@@ -17,7 +17,7 @@ diff, version and mutate; if the same file also held the loop that drives it,
 | `kalshi-sports-freeform.json` | one prompt, all tools, no plan — the control |
 
 ```python
-from topics.kalshi.run.load import load_agent
+from topics.kalshi.eval.load import load_agent
 agent = load_agent("horizon")          # short label, or the full file name
 ```
 
@@ -84,7 +84,7 @@ made the money.
 
 ```bash
 # autonomous: sweep several leagues, adopt live markets, stop at $3
-python -m topics.kalshi.run.supervisor \
+python -m topics.kalshi.eval.supervisor \
     --league EPL,LALIGA,MLS,USL --mode horizon --discover \
     --max-contracts 8 --poll 150 --budget 3.00
 
@@ -186,11 +186,11 @@ to pay for itself**, and stop selling the winners.
 
 | | |
 |---|---|
-| `../run/load.py` | JSON to `Agent`, and the short labels the CLI takes |
-| `../run/trading.py` | `quote_from()` and `decide()` — the trading rule |
-| `../run/supervisor.py` | discovery, polling, budget, durable state |
-| `../run/__main__.py` | single-shot and `--watch` runs |
-| `../run/slate.py` | what is actually tradeable today |
+| `../eval/load.py` | JSON to `Agent`, and the short labels the CLI takes |
+| `../eval/trading.py` | `quote_from()` and `decide()` — the trading rule |
+| `../eval/supervisor.py` | discovery, polling, budget, durable state |
+| `../eval/__main__.py` | single-shot and `--watch` runs |
+| `../eval/slate.py` | what is actually tradeable today |
 | `../eval/validation.py` | refuses to act on output that disagrees with itself |
 | `../eval/verify.py` | settlement scoring — Brier, calibration, paper pnl |
 | `../eval/verify_horizon.py` | five-minute scoring — skill, fills, coverage, pnl |

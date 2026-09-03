@@ -1,4 +1,4 @@
-"""``topics.kalshi.run.trading`` — the parts that broke in production.
+"""``topics.kalshi.eval.trading`` — the parts that broke in production.
 
 Each of these exists because it went wrong live, in a way that reading the diff
 did not catch.

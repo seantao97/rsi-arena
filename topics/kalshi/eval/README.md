@@ -12,7 +12,7 @@ repository: this one is public.
 ## Before starting: is there anything to trade?
 
 ```bash
-python -m topics.kalshi.run.slate --league EPL,LALIGA,SERIEA,MLS
+python -m topics.kalshi.eval.slate --league EPL,LALIGA,SERIEA,MLS
 ```
 
 ```
@@ -38,7 +38,7 @@ this command exists.
 ```bash
 export OPENROUTER_API_KEY=...
 
-python -m topics.kalshi.run.supervisor \
+python -m topics.kalshi.eval.supervisor \
     --league EPL,LALIGA,SERIEA,MLS,ARGENTINA,BRASIL \
     --mode horizon --discover \
     --max-contracts 12 --max-per-game 3 \
@@ -131,7 +131,7 @@ which is how a red build stops meaning anything.
 Run it by hand before a long session:
 
 ```bash
-python topics/kalshi/run/preflight.py "EPL,LALIGA,SERIEA"
+python topics/kalshi/eval/preflight.py "EPL,LALIGA,SERIEA"
 ```
 
 ## What lands where

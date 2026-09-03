@@ -1,4 +1,4 @@
-"""``topics.kalshi.run.supervisor`` — that it loads, and that the book adds up.
+"""``topics.kalshi.eval.supervisor`` — that it loads, and that the book adds up.
 
 The first of these exists because a misplaced import shipped to main. Every
 test at the time covered horizon.py and the benchmark; none of them imported
