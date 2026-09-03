@@ -32,7 +32,7 @@ class HorizonWindow(Eval):
     def __init__(self, ticker: str, at: datetime, *, history: History | None = None,
                  minutes: int = HORIZON_MINUTES, agent_name: str = "horizon",
                  config=None, spec: dict[str, Any] | None = None,
-                 **inputs: Any) -> None:
+                 game: str = "", **inputs: Any) -> None:
         self.ticker, self.at, self.minutes = ticker, at, minutes
         self.history = history or History()
         candle = self.history.quote_at(ticker, at, MINUTE)
@@ -49,7 +49,12 @@ class HorizonWindow(Eval):
             else load_agent(agent_name, tools=box, config=config),
             self.grade,
             description=f"{self.name}: {ticker} @ {at.isoformat()[:16]}",
-            input={"question": ticker, **inputs},
+            # The plan reads {{game}} — Eval checks that against the plan and
+            # refuses to construct without it. A caller replaying a fixture it
+            # has a timeline for passes the real state; one that does not says
+            # so, because a thinner forecast is a result and a missing key is
+            # a crash four steps in.
+            input={"question": ticker, "game": game or "unavailable", **inputs},
         )
 
     def grade(self, result: Any) -> EvalOutput:
@@ -64,11 +69,23 @@ class HorizonWindow(Eval):
                 score=0.0, comments="unusable output — nothing to score",
                 metadata={"ticker": self.ticker, "at": self.at.isoformat()},
                 output=out)
+        # No-change has zero error on a market that did not move, so skill is
+        # undefined there and scorer.py reports 0 rather than a huge negative.
+        # Right for the metric, wrong for a leaderboard: the window scores a
+        # flat 0.5 whether the forecast was exactly right or badly wrong.
+        # Flagged rather than rescored — changing the metric is a judgement that
+        # belongs to whoever owns it, and a flag lets a caller pooling windows
+        # drop the ones that carry no signal instead of averaging them as ties.
+        unmeasurable = window.naive_error < 1e-9
+        said = (f"predicted {window.predicted:.3f}, market printed "
+                f"{window.realised:.3f}; no-change missed by "
+                f"{window.naive_error:.3f} and this by {window.error:.3f}")
+        if unmeasurable:
+            said += " — the market did not move, so there is no skill to measure"
         return EvalOutput(
             score=0.5 + window.skill / 2,
-            comments=(f"predicted {window.predicted:.3f}, market printed "
-                      f"{window.realised:.3f}; no-change missed by "
-                      f"{window.naive_error:.3f} and this by {window.error:.3f}"),
-            metadata={"skill": window.skill, **window.to_dict()},
+            comments=said,
+            metadata={"skill": window.skill, "unmeasurable": unmeasurable,
+                      **window.to_dict()},
             output=out,
             ground_truth={"mid": window.realised})

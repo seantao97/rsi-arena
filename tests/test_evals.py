@@ -250,3 +250,73 @@ async def test_run_is_score_with_the_run_in_front_of_it(simple_agent: Agent, llm
     ran = await ev.run(llm=llm)
     scored = await ev.score(ev.agent_output)
     assert ran.model_dump() == scored.model_dump()
+
+
+# --- a run that never finished is not a bad answer ---------------------------
+
+
+class Crashed:
+    """An AgentResult that carries an error and no answer."""
+
+    output = None
+    error = "OpenRouterError: OPENROUTER_API_KEY is not set in the environment"
+    error_kind = "provider"
+
+
+class BailedOut:
+    """Stopped at its ceiling, but answered from what it already had."""
+
+    output = "a short answer written from state"
+    error = "budget exhausted"
+    error_kind = "max_spend"
+
+
+async def test_a_crashed_run_never_reaches_the_scoring_function(simple_agent: Agent) -> None:
+    """An expired key, a bad template and a harness that genuinely cannot
+    answer would otherwise be indistinguishable at the bottom of a leaderboard,
+    which reads infrastructure failure as evidence about the harness."""
+    def explode(result):
+        raise AssertionError("the scoring function should not have been called")
+
+    out = await Eval(simple_agent, explode, description="d").score(Crashed())
+    assert out.score == 0.0
+    assert out.metadata["run_failed"] is True
+    assert out.metadata["error_kind"] == "provider"
+    assert "did not finish" in out.comments
+
+
+async def test_an_answered_cut_off_is_still_scored(simple_agent: Agent) -> None:
+    """A run stopped at its budget ceiling carries an error *and* an answer
+    written from what it already had. Grading that as a dead run would remove
+    the reason to bail out at all."""
+    out = await Eval(simple_agent, echoes).score(BailedOut())
+    assert out.score == 1.0
+    assert not out.metadata.get("run_failed")
+
+
+async def test_every_eval_gets_the_guard_without_asking(simple_agent: Agent) -> None:
+    """It is in the core, so no eval has to remember to check."""
+    out = await Eval(simple_agent, lambda r: EvalOutput(score=1.0)).score(Crashed())
+    assert out.score == 0.0
+
+
+# --- an eval that cannot run is refused before it is paid for -----------------
+
+
+async def test_a_run_missing_an_input_its_plan_reads_is_refused(config, llm) -> None:
+    needs_game = Agent(
+        name="needs-game", context="c", config=config,
+        plan=Plan(steps=[PromptStep(name="a", prompt="{{question}} {{game}}",
+                                    output_key="a")]))
+    ev = Eval(needs_game, echoes, input={"question": "hi"})
+    with pytest.raises(ValueError) as exc:
+        await ev.run(llm=llm)
+    assert "game" in str(exc.value)
+    assert ev.agent_output is None, "refused before the agent was called"
+
+
+async def test_an_eval_that_never_runs_owes_no_inputs(simple_agent: Agent) -> None:
+    """One that grades a recorded feed has no business supplying the agent's
+    inputs — which is why the check lives in run() and not the constructor."""
+    ev = Eval(simple_agent, lambda r: EvalOutput(score=0.25), description="feed")
+    assert (await ev.score(None)).score == 0.25

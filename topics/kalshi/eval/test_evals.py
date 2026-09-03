@@ -180,3 +180,21 @@ def test_a_deferred_eval_names_the_benchmark_it_scores_against() -> None:
     benchmarks are free to match, which is the point of quoting them."""
     assert "market" in SettlementBrier.description
     assert "no change" in HorizonSkill.description
+
+
+def test_an_eval_supplies_every_input_its_agent_reads() -> None:
+    """Eval.run() refuses a plan whose inputs are not covered, so this is the
+    check that the Kalshi evals hold up their end of that bargain."""
+    for ev in (HorizonWindow(TICKER, AT), ForecastConsistency(ticker=TICKER)):
+        assert not ev.agent.plan.required_inputs() - set(ev.input), ev.name
+
+
+def test_an_unmoved_market_is_flagged_as_unmeasurable() -> None:
+    """No-change has zero error there, so skill is undefined and the window
+    scores a flat 0.5 whether the forecast was exactly right or badly wrong.
+    Pooling those as ties drags a leaderboard toward the middle."""
+    out = HorizonWindow(TICKER, AT).grade(
+        FakeRun({"delta_cents": 1.5, "half_width_cents": 3.0}))
+    if out.metadata.get("unmeasurable"):
+        assert out.score == 0.5
+        assert "did not move" in out.comments

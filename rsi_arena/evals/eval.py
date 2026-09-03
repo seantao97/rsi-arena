@@ -17,6 +17,10 @@ to whatever is doing the travelling rather than here.
 An eval whose answer is not available yet scores separately from the run that
 produced it — ``await ev.score(recorded)`` — which is how a forecast made hours
 ago is graded once the match it was about has finished.
+
+A run that failed never reaches the scoring function: it is scored zero and
+flagged ``run_failed``, so an expired key does not read as a harness that cannot
+answer.
 """
 
 from __future__ import annotations
@@ -55,7 +59,11 @@ EvalFunction = Callable[[AgentResult], Union[EvalOutput, Awaitable[EvalOutput]]]
 
 
 class Eval:
-    """An agent, the input to run it on, and the function that scores it."""
+    """An agent, the input to run it on, and the function that scores it.
+
+    :meth:`run` checks the input against what the agent's plan actually reads,
+    before calling it, so an eval that forgets one costs nothing to find out.
+    """
 
     def __init__(
         self,
@@ -74,6 +82,22 @@ class Eval:
         #: ``None`` for an eval that scores something recorded earlier.
         self.agent_output: AgentResult | None = None
 
+    @staticmethod
+    def _did_not_finish(agent_output: Any) -> str:
+        """The error on a run that produced no answer, or ``""``.
+
+        An error alone is not enough. A run stopped at its budget ceiling in
+        max-spend mode carries one *and* an answer written from what it already
+        had, and that answer is worth scoring — an answered cut-off beats a dead
+        run, and grading them the same would remove the reason to bail out at
+        all. So a run failed only if it left nothing to grade.
+        """
+        error = str(getattr(agent_output, "error", "") or "")
+        if not error:
+            return ""
+        answered = getattr(agent_output, "output", None)
+        return "" if answered not in (None, "", {}, []) else error
+
     async def score(self, agent_output: Any) -> EvalOutput:
         """Score an output the agent already produced.
 
@@ -86,9 +110,24 @@ class Eval:
 
         :meth:`run` is this with the run in front of it.
         """
-        out = self.eval_function(agent_output)
-        if inspect.isawaitable(out):
-            out = await out
+        # A run that failed is not an answer to grade. An expired key, a bad
+        # template and a harness that genuinely cannot answer would otherwise be
+        # indistinguishable at the bottom of a leaderboard, which reads
+        # infrastructure failure as evidence about the harness. Handled here so
+        # that every eval gets it and no eval has to remember to.
+        failure = self._did_not_finish(agent_output)
+        if failure:
+            out = EvalOutput(
+                score=0.0,
+                comments=f"the run did not finish: {failure}",
+                metadata={"run_failed": True,
+                          "error_kind": str(getattr(agent_output, "error_kind", "")
+                                            or "")},
+            )
+        else:
+            out = self.eval_function(agent_output)
+            if inspect.isawaitable(out):
+                out = await out
         if self.description and not out.description:
             out = out.model_copy(update={"description": self.description})
         return out
@@ -100,6 +139,17 @@ class Eval:
         across a sweep of questions needs.
         """
         merged = {**self.input, **overrides}
+        # Checked here rather than in the constructor: an eval that grades a
+        # recorded feed never runs its agent and has no business supplying the
+        # agent's inputs. Checked before the call rather than after, so a plan
+        # that reads a name nobody passed costs nothing — the alternative is a
+        # KeyError from render at the step that reads it, once the earlier steps
+        # have run and been paid for.
+        missing = self.agent.plan.required_inputs() - set(merged)
+        if missing:
+            raise ValueError(
+                f"{self.agent.name} reads {', '.join(sorted(missing))}, which "
+                f"this eval does not supply; pass it in `input`")
         question = merged.pop("question", None)
         self.agent_output = await self.agent.run(question, **merged)
         return await self.score(self.agent_output)
