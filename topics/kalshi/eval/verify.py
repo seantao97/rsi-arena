@@ -11,6 +11,7 @@ scores beautifully and required no skill. The comparison is the measurement.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -429,14 +430,22 @@ def main() -> int:
 
     if args.mode == "horizon":
         from . import verify_horizon
+        from .evals import HorizonSkill
+
         feeds = [x.strip() for x in args.feed.split(",") if x.strip()]
         # One evening is not enough to tell a real number from a lucky one, so
         # pooling is a first-class option rather than something to reconstruct
         # by hand afterwards.
-        h = (verify_horizon.load_many(feeds) if len(feeds) > 1
-             else verify_horizon.load(feeds[0]))
+        #
+        # The eval and this report read the same object. The eval is what the
+        # arena ranks on; everything below is the human view of the same run,
+        # and the two cannot drift because there is only one of them.
+        ev = HorizonSkill(feed=feeds)
+        h = ev.report()
+        verdict = asyncio.run(ev.score(None))
         if args.json:
-            print(json.dumps({"windows": h.n, "contracts": h.contracts,
+            print(json.dumps({"eval": ev.name, "score": round(verdict.score, 4),
+                              "windows": h.n, "contracts": h.contracts,
                               "mae": round(h.mae, 4),
                               "naive_mae": round(h.naive_mae, 4),
                               "skill": round(h.skill, 4),
@@ -448,6 +457,7 @@ def main() -> int:
                               "unresolved": h.unresolved}, indent=2))
         else:
             print(h.summary())
+            print(f"\n  {ev.name}: {verdict.score:.3f} — {verdict.comments}")
             if len(feeds) > 1:
                 rows = h.by_run()
                 print(f"\n  {'run':18}{'windows':>8}{'contracts':>11}"
@@ -464,7 +474,11 @@ def main() -> int:
                 print(f"  wrote {path}")
         return 0
 
-    report = load(args.feed)
+    from .evals import SettlementBrier
+
+    ev = SettlementBrier(feed=args.feed)
+    report = ev.report()
+    verdict = asyncio.run(ev.score(None))
     paper = paper_trade(report, args.bankroll, args.min_edge, args.kelly)
     if args.json:
         print(json.dumps({
@@ -479,6 +493,7 @@ def main() -> int:
                       "max_drawdown": paper.max_drawdown}}, indent=2, default=str))
     else:
         print(report.summary())
+        print(f"\n  {ev.name}: {verdict.score:.3f} — {verdict.comments}")
         print()
         print(paper.summary())
     if args.plots:

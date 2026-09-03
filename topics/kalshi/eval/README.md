@@ -9,6 +9,35 @@ directory is readable while it runs, and stopping it is a Ctrl-C.
 That needs somewhere to keep an API key, which is why it does not live in this
 repository: this one is public.
 
+## The evals
+
+Four, one class to a file in `evals/`, declared the way the tools are — a
+`REGISTRY`, a `describe()`, and a description written for whoever has to choose
+between them. Every one subclasses the core `rsi_arena.Eval`, so no Kalshi type
+escapes into the framework.
+
+| eval | asks | answerable |
+| --- | --- | --- |
+| `forecast_consistency` | does the forecast contradict itself | immediately |
+| `horizon_window` | did it beat no-change | replayed — the answer already exists |
+| `horizon_skill` | the same, over live runs, pooled | five minutes later |
+| `settlement_brier` | did it understand the game | after the whistle |
+
+```python
+from topics.kalshi.eval.evals import EVALS, describe
+
+print(describe())
+out = await EVALS["horizon_skill"](feed="~/.kalshi-agent/forecasts.jsonl").score(None)
+```
+
+The two that grade a recorded feed go through `Eval.score()` rather than
+`Eval.run()`. Their forecasts were made hours ago by a run that is gone, and
+running an agent to re-derive them would be both wrong and expensive.
+
+`verify.py` reads the same objects: the eval gives the score the arena ranks on,
+the CLI renders the report a person reads, and they cannot drift because there
+is one of them.
+
 ## Before starting: is there anything to trade?
 
 ```bash

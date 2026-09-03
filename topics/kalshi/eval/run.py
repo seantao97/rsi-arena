@@ -28,7 +28,7 @@ from pathlib import Path
 from rsi_arena import Agent, AgentConfig
 
 from .. import MINUTE, History
-from .evals import window_eval
+from .evals import HorizonWindow
 from .replay import HORIZON_MINUTES, Timeline, replay_tools, timeline
 from .scorer import WindowScore, score_window
 
@@ -125,7 +125,7 @@ async def run_harness(spec: dict, line: Timeline, tickers: list[str],
         # One window is one eval: the agent rebound against tools that read
         # history rather than the live book, and a function that scores what it
         # said against what printed. The agent is unchanged and cannot tell.
-        ev = window_eval(ticker, at, history=hist, minutes=minutes, spec=spec,
+        ev = HorizonWindow(ticker, at, history=hist, minutes=minutes, spec=spec,
                          game=json.dumps(line.state_at(at))[:1200])
         async with gate:
             out = await ev.run()

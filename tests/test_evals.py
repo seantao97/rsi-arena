@@ -229,3 +229,24 @@ async def test_a_custom_store_drops_straight_in() -> None:
     await store.save(EvalOutput())
     assert Counting.saves == 1
     assert isinstance(await store.list(), list)
+
+
+async def test_an_eval_can_score_without_running(simple_agent: Agent) -> None:
+    """Not every eval can run its agent at the moment it scores. A forecast
+    about the next five minutes is answerable five minutes later, and one about
+    a match after the whistle — by which time the run is gone and lives in a
+    file. Those score what was recorded."""
+    ev = Eval(simple_agent, lambda r: EvalOutput(score=0.75, comments="from a file"),
+              description="deferred")
+    out = await ev.score(None)
+    assert out.score == 0.75
+    assert out.description == "deferred", "still names itself"
+    assert ev.agent_output is None, "nothing ran"
+
+
+async def test_run_is_score_with_the_run_in_front_of_it(simple_agent: Agent, llm) -> None:
+    """One scoring path, so the two cannot drift."""
+    ev = Eval(simple_agent, echoes, input={"question": "Say hello."})
+    ran = await ev.run(llm=llm)
+    scored = await ev.score(ev.agent_output)
+    assert ran.model_dump() == scored.model_dump()
