@@ -28,7 +28,7 @@ def test_agent_builds_with_no_toolbox_supplied() -> None:
     agent = load_agent("horizon")
     assert [step.name for step in agent.plan.steps] == \
         ["quote", "path", "tape", "predict"]
-    assert {tool.name for tool in agent.tools} == \
+    assert set(agent.tools) == \
         {"market_quote", "candlesticks", "previous_trades"}
 
 

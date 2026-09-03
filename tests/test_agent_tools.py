@@ -68,7 +68,8 @@ def test_openai_schema_shape(word_count):
 
 async def test_calling_a_tool_returns_its_output(word_count):
     result = await word_count(text="one two three")
-    assert result.ok and result.output == {"count": 3} and result.cost.usd == 0.0
+    assert result.ok and result.raw_output == {"count": 3}
+    assert "cost" not in result.raw_api_data, "a free tool records no charge"
 
 
 async def test_the_model_reads_the_sentence_and_code_reads_the_structure():
@@ -76,7 +77,7 @@ async def test_the_model_reads_the_sentence_and_code_reads_the_structure():
     spend tokens on data the sentence already summarises."""
     double = Double()
     result = await double(n=4)
-    assert result.output == {"value": 8}, "a pipeline step reads the structure"
+    assert result.raw_output == {"value": 8}, "a pipeline step reads the structure"
     assert result.for_model() == "8", "the model reads the sentence"
     assert (await double.aget_tool_output(n=4)).raw_output == {"value": 8}
 
@@ -116,7 +117,7 @@ async def test_a_flat_cost_is_charged_per_call():
         name = "priced"
         cost_usd = 0.01
 
-    assert (await Priced()(n=1)).cost.usd == 0.01
+    assert (await Priced()(n=1)).raw_api_data["cost"].usd == 0.01
 
 
 async def test_a_result_that_carries_its_own_cost_is_not_double_charged():
@@ -128,13 +129,16 @@ async def test_a_result_that_carries_its_own_cost_is_not_double_charged():
     class Carries(Tool):
         name = "carrier"
         description = "d"
-        cost_usd = 99.0
+        cost_usd = 99.0        # would be charged if the answer carried nothing
 
         def get_tool_output(self, input):
-            return ToolOutput(response=Carrier())   # type: ignore[arg-type]
+            # What an api_tool does: hand back the response whole, so its own
+            # cost survives instead of being buried under a repackaged payload.
+            return Carrier()   # type: ignore[return-value]
 
     result = await Carries()()
-    assert result.output == "payload" and result.cost.usd == 0.004
+    assert result.response == "payload"
+    assert result.raw_api_data["cost"].usd == 0.004, "its own cost, not the flat one"
 
 
 async def test_a_traced_call_produces_a_span_and_a_cost(word_count):
@@ -159,10 +163,9 @@ async def test_a_traced_failure_marks_the_span_error():
 
 
 def test_for_model_serialises_non_strings(word_count):
-    from rsi_arena.agent.tools import ToolResult
-
-    assert ToolResult(name="t", output={"a": 1}).for_model() == '{"a": 1}'
-    assert ToolResult(name="t", output="plain").for_model() == "plain"
+    assert ToolOutput(raw_output={"a": 1}).for_model() == '{"a": 1}'
+    assert ToolOutput(response="plain").for_model() == "plain"
+    assert ToolOutput.failed("no").for_model().startswith("ERROR: ")
 
 
 # --- from an API endpoint ---------------------------------------------------
@@ -172,8 +175,8 @@ async def test_an_api_endpoint_becomes_a_tool(demo_spec: APISpec, api: APIClient
     search = api_tool(demo_spec, "search", client=api, name="search")
     assert search.name == "search"
     result = await search(q="weather", country="us")
-    assert result.ok and result.output[0]["title"] == "T"
-    assert result.cost.usd == 0.004, "the API's own cost, not a flat tool cost"
+    assert result.ok and result.raw_output["value"][0]["title"] == "T"
+    assert result.raw_api_data["cost"].usd == 0.004, "the API's own cost"
 
 
 def test_pinned_parameters_are_hidden_from_the_model(demo_spec: APISpec, api: APIClient):
@@ -199,12 +202,14 @@ def test_api_tool_can_name_a_registered_api(demo_spec: APISpec):
 def test_names_and_membership(toolbox: Toolbox, word_count):
     assert toolbox.names() == ["word_count"]
     assert "word_count" in toolbox and len(toolbox) == 1
-    assert toolbox.get("word_count") is word_count
+    assert toolbox["word_count"] is word_count
 
 
 def test_an_unknown_tool_lists_what_is_there(toolbox: Toolbox):
+    """A Toolbox is a dict, so lookup raises where a dict raises — but the
+    message says what *is* there, which is the whole reason to subclass it."""
     with pytest.raises(KeyError) as exc:
-        toolbox.get("nope")
+        toolbox["nope"]
     assert "word_count" in str(exc.value)
 
 
@@ -231,4 +236,63 @@ def test_add_api_registers_an_endpoint_as_a_tool(demo_spec: APISpec, api: APICli
 async def test_call_many_runs_independent_calls_together(toolbox: Toolbox):
     results = await toolbox.call_many([("word_count", {"text": "a b"}),
                                        ("word_count", {"text": "a b c"})])
-    assert [r.output for r in results] == [{"count": 2}, {"count": 3}]
+    assert [r.raw_output for r in results] == [{"count": 2}, {"count": 3}]
+
+
+# --- what the slimmed contract guarantees ------------------------------------
+
+
+async def test_a_failing_tool_answers_rather_than_raises() -> None:
+    """A failed tool is information: the model reads the error and tries
+    different arguments. Only the step budget stops it."""
+
+    class Explodes(Tool):
+        name = "explodes"
+        description = "Always fails."
+
+        def get_tool_output(self, input):
+            raise ValueError("no")
+
+    out = await Explodes()()
+    assert out.ok is False
+    assert "ValueError" in (out.error or "")
+    assert out.for_model().startswith("ERROR: ")
+
+
+async def test_the_answer_carries_no_accounting() -> None:
+    """Cost and latency belong to the trace span, which is where a run's
+    accounting already lives. Carrying them on the answer too is how the same
+    money got counted in two places."""
+    out = await Double()(n=4)
+    for absent in ("cost", "latency_s", "cached", "name", "args"):
+        assert not hasattr(out, absent), f"{absent} belongs to the span"
+
+
+async def test_a_traced_call_records_the_cost_on_the_span() -> None:
+    from rsi_arena.core.trace import Tracer
+
+    tracer = Tracer(agent="t")
+
+    class Priced(Tool):
+        name = "priced"
+        description = "Costs money."
+        cost_usd = 0.01
+
+        def get_tool_output(self, input):
+            return ToolOutput(response="done", raw_output={"ok": True})
+
+    out = await Priced()(tracer=tracer)
+    trace = tracer.finish()
+    assert out.ok
+    assert trace.costs.total_usd == 0.01
+    span = trace.root.children[0]
+    assert span.name == "priced" and "latency_s" in span.attributes
+
+
+def test_a_toolbox_is_a_dict(toolbox: Toolbox, word_count) -> None:
+    """Because that is what it is. Iteration follows dict semantics and yields
+    names; ``.values()`` gives the tools."""
+    assert isinstance(toolbox, dict)
+    assert list(toolbox) == ["word_count"]
+    assert list(toolbox.values()) == [word_count]
+    assert toolbox.get("nope") is None, "dict.get keeps dict semantics"

@@ -464,7 +464,7 @@ class Agent:
         mutation fails when it is loaded instead of halfway through a battle.
         """
         available = tools or Toolbox()
-        selected = Toolbox([available.get(n) for n in data.get("tools", [])])
+        selected = Toolbox([available[n] for n in data.get("tools", [])])
         return cls(
             name=data["name"],
             context=data.get("context", ""),

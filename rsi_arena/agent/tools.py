@@ -77,6 +77,19 @@ class ToolOutput:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def for_model(self) -> str:
+        """What goes back as the ``tool`` message content.
+
+        The sentence if there is one, the structure otherwise. A model choosing
+        its next call wants the summary; falling back to the payload is for
+        tools that only ever produce data.
+        """
+        if self.error:
+            return f"ERROR: {self.error}"
+        if self.response:
+            return self.response
+        return json.dumps(self.raw_output, default=str)[:20000]
+
     @classmethod
     def failed(cls, reason: str) -> "ToolOutput":
         """A tool that cannot answer says so rather than raising.
@@ -85,40 +98,6 @@ class ToolOutput:
         read a traceback.
         """
         return cls(response=f"unavailable: {reason}", error=reason)
-
-
-class ToolResult(BaseModel):
-    """One invocation, as both callers need it.
-
-    ``output`` is the structure — what a ``ToolStep`` writes into run state and
-    the next step interpolates. ``response`` is the sentence the model reads.
-    They are separate because they are read by different things: a fixed
-    pipeline wants the list it can index, and a model choosing its next call
-    wants the summary rather than the payload behind it.
-    """
-
-    name: str
-    args: dict[str, Any] = Field(default_factory=dict)
-    output: Any = None
-    response: str = ""
-    error: str | None = None
-    cached: bool = False
-    latency_s: float = 0.0
-    cost: Cost = Field(default_factory=Cost)
-
-    @property
-    def ok(self) -> bool:
-        return self.error is None
-
-    def for_model(self) -> str:
-        """What gets sent back as the ``tool`` message content."""
-        if self.error:
-            return f"ERROR: {self.error}"
-        if self.response:
-            return self.response
-        if isinstance(self.output, str):
-            return self.output
-        return json.dumps(self.output, default=str)[:20000]
 
 
 class Tool:
@@ -216,68 +195,71 @@ class Tool:
 
         Two callers want different things from the same body. The model wants
         the sentence and gets it through :meth:`__call__` as a
-        :class:`ToolResult`; code wants the structure — a game id, a list of
+        the sentence; code wants the structure — a game id, a list of
         markets — and gets the whole :class:`ToolOutput` here.
         """
         return await asyncio.to_thread(self.get_tool_output,
                                        {**(input or {}), **kwargs})
 
-    async def __call__(self, tracer: Tracer | None = None, **kwargs: Any) -> ToolResult:
-        started = time.monotonic()
+    async def __call__(self, tracer: Tracer | None = None, **kwargs: Any) -> ToolOutput:
+        """Invoke the tool. Never raises — a failure is an answer.
 
-        async def invoke() -> Any:
-            out = await self.aget_tool_output(kwargs)
-            # An api_tool answers with the endpoint's own response rather than
-            # a ToolOutput, so that its cost survives the trip; only a
-            # ToolOutput can refuse.
-            if isinstance(out, ToolOutput) and not out.ok:
-                raise RuntimeError(out.error)
+        A failed tool is information, not a crash: the model reads the error and
+        tries different arguments, and only the step budget stops it.
+
+        What the call *cost* and how long it took are not on the answer. They go
+        to the trace span, which is where a run's accounting already lives, and
+        duplicating them onto the result was how the same money got counted in
+        two places.
+        """
+        started = time.monotonic()
+        if tracer is None:
+            return await self._invoke(kwargs)
+        async with tracer.span(self.name, "tool", input=kwargs) as span:
+            out = await self._invoke(kwargs)
+            span.set_output(out.raw_output or out.response if out.ok else out.error)
+            span.attributes["latency_s"] = time.monotonic() - started
+            cost = out.raw_api_data.get("cost")
+            if isinstance(cost, Cost) and (cost.usd or cost.cached):
+                tracer.record_cost("tool", self.name, cost, span)
+            if not out.ok:
+                span.status = "error"
+                span.error = out.error
             return out
 
-        if tracer is None:
-            return await self._run(invoke, kwargs, started, None)
-        async with tracer.span(self.name, "tool", input=kwargs) as span:
-            result = await self._run(invoke, kwargs, started, tracer)
-            span.set_output(result.output if result.ok else result.error)
-            if result.cost.usd or result.cost.cached:
-                tracer.record_cost("tool", self.name, result.cost, span)
-            if not result.ok:
-                span.status = "error"
-                span.error = result.error
-            return result
-
-    async def _run(
-        self, invoke: Callable[[], Any], kwargs: dict[str, Any], started: float,
-        tracer: Tracer | None,
-    ) -> ToolResult:
-        result = ToolResult(name=self.name, args=kwargs)
+    async def _invoke(self, args: dict[str, Any]) -> ToolOutput:
         try:
-            output = await invoke()
+            answer = await self.aget_tool_output(args)
         except Exception as exc:  # noqa: BLE001 - surfaced to the model, not raised
-            # A failed tool is information, not a crash: the model can read the
-            # error and try different arguments. Only the step budget stops it.
-            result.error = f"{type(exc).__name__}: {exc}"
-        else:
-            if isinstance(output, ToolOutput):
-                # The structure goes to code, the sentence to the model. A tool
-                # that only writes a sentence still has to put something in
-                # output, since a pipeline step may read it.
-                result.response = output.response
-                output = output.raw_output or output.response
-            result.output, result.cost, result.cached = _unwrap(output, self.cost_usd)
-        result.latency_s = time.monotonic() - started
-        return result
+            return ToolOutput.failed(f"{type(exc).__name__}: {exc}")
+        return _as_output(answer, self.cost_usd)
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(name={self.name!r}, v{self.version})"
 
 
-def _unwrap(output: Any, flat_cost: float) -> tuple[Any, Cost, bool]:
-    """Pull cost out of results that carry their own (API responses, tools)."""
-    cost = getattr(output, "cost", None)
-    if isinstance(cost, Cost):
-        return getattr(output, "data", output), cost, bool(getattr(output, "cached", False))
-    return output, (Cost.flat(flat_cost) if flat_cost else Cost.free()), False
+def _as_output(answer: Any, flat_cost: float) -> ToolOutput:
+    """Normalise whatever a tool body returned into one ToolOutput.
+
+    A declared tool answers with a ToolOutput already. An api_tool answers with
+    the endpoint's response, returned whole so its own cost and cached flag
+    survive the trip rather than being buried under a repackaged payload.
+    """
+    if isinstance(answer, ToolOutput):
+        out = answer
+    else:
+        cost = getattr(answer, "cost", None)
+        data = getattr(answer, "data", answer) if isinstance(cost, Cost) else answer
+        out = ToolOutput(
+            response=data if isinstance(data, str) else json.dumps(data, default=str)[:20000],
+            raw_output=data if isinstance(data, dict) else {"value": data},
+        )
+        if isinstance(cost, Cost):
+            out.raw_api_data["cost"] = cost
+            out.raw_api_data["cached"] = bool(getattr(answer, "cached", False))
+    if flat_cost and "cost" not in out.raw_api_data:
+        out.raw_api_data["cost"] = Cost.flat(flat_cost)
+    return out
 
 
 # --- from a registered API endpoint ------------------------------------------
@@ -347,54 +329,48 @@ def api_tool(
 # --- collection -------------------------------------------------------------
 
 
-class Toolbox:
-    """The set of tools an agent may use. Ordered, addressable by name."""
+class Toolbox(dict):
+    """The tools an agent may use, by name.
 
-    def __init__(self, tools: list[Tool] | None = None) -> None:
-        self._tools: dict[str, Tool] = {}
-        for item in tools or []:
-            self.add(item)
+    A dict, because that is what it is. Only three things here are not dict
+    behaviour: construction from a list (a tool already knows its own name), an
+    error that lists what *is* available, and a concurrent call — a model may
+    emit several tool calls in one turn and they are independent.
 
-    def add(self, item: Tool) -> Tool:
-        self._tools[item.name] = item
-        return item
+    Iteration follows dict semantics and yields names; ``.values()`` gives the
+    tools.
+    """
 
-    def add_api(self, api: str | APISpec, endpoint: str, **kwargs: Any) -> Tool:
+    def __init__(self, tools: "list[Tool] | None" = None) -> None:
+        super().__init__((t.name, t) for t in (tools or []) if t is not None)
+
+    def __missing__(self, name: str) -> "Tool":
+        known = ", ".join(sorted(self)) or "none"
+        raise KeyError(f"unknown tool {name!r} (have: {known})")
+
+    def add(self, tool: "Tool") -> "Tool":
+        self[tool.name] = tool
+        return tool
+
+    def add_api(self, api: "str | APISpec", endpoint: str, **kwargs: Any) -> "Tool":
         return self.add(api_tool(api, endpoint, **kwargs))
 
-    def get(self, name: str) -> Tool:
-        try:
-            return self._tools[name]
-        except KeyError:
-            known = ", ".join(sorted(self._tools)) or "none"
-            raise KeyError(f"unknown tool {name!r} (have: {known})") from None
-
     def names(self) -> list[str]:
-        return list(self._tools)
+        return list(self)
 
     def schemas(self, only: list[str] | None = None) -> list[dict[str, Any]]:
         """OpenRouter ``tools`` payload, optionally narrowed to a subset."""
-        chosen = [self._tools[n] for n in (only or self._tools) if n in self._tools]
-        return [t.to_openai_schema() for t in chosen]
+        return [self[n].to_openai_schema() for n in (only or self) if n in self]
 
     def describe(self) -> str:
         """Plain-text catalogue for a prompt, when tools are described not passed."""
-        return "\n".join(f"- {t.name}: {t.description}" for t in self._tools.values())
+        return "\n".join(f"- {t.name}: {t.description}" for t in self.values())
 
-    async def call(self, name: str, args: dict[str, Any], tracer: Tracer | None = None) -> ToolResult:
-        return await self.get(name)(tracer=tracer, **args)
+    async def call(self, name: str, args: dict[str, Any],
+                   tracer: Tracer | None = None) -> ToolOutput:
+        return await self[name](tracer=tracer, **args)
 
-    async def call_many(
-        self, calls: list[tuple[str, dict[str, Any]]], tracer: Tracer | None = None
-    ) -> list[ToolResult]:
+    async def call_many(self, calls: list[tuple[str, dict[str, Any]]],
+                        tracer: Tracer | None = None) -> list[ToolOutput]:
         """Run independent tool calls concurrently — a model may emit several."""
         return await asyncio.gather(*(self.call(n, a, tracer) for n, a in calls))
-
-    def __len__(self) -> int:
-        return len(self._tools)
-
-    def __iter__(self) -> Any:
-        return iter(self._tools.values())
-
-    def __contains__(self, name: object) -> bool:
-        return name in self._tools
