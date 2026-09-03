@@ -70,9 +70,9 @@ from .core import (
 )
 from .evals import (
     Eval,
-    EvalResult,
+    EvalOutput,
+    scored_by,
     EvalStore,
-    EvalSuite,
     InMemoryEvalStore,
     Score,
     Scorer,
@@ -104,7 +104,7 @@ __all__ = [
     "APIClient", "APISpec", "Endpoint", "Param", "APIResponse", "APIError",
     "MissingCredential", "Registry", "registry", "register_api", "get_api",
     "NoAuth", "BearerAuth", "HeaderAuth", "QueryAuth",
-    "Eval", "EvalSuite", "EvalResult", "Score", "Scorer",
+    "Eval", "EvalOutput", "scored_by", "Score", "Scorer",
     "EvalStore", "InMemoryEvalStore", "default_eval_store", "set_default_eval_store",
     "register_scorer", "get_scorer", "scorer_from_spec",
     "Cost", "Usage", "CostTracker", "BudgetExceeded", "MaxSpendExceeded",

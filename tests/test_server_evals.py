@@ -33,24 +33,24 @@ def test_running_an_eval_scores_the_agent_and_returns_the_result(client):
     result = run_eval(client, scorer={"type": "contains", "value": "ECB"})
     assert result["agent"] == "fermi" and result["prompt"] == FERMI
     assert result["output"] and result["ok"] is True
-    assert result["score"]["passed"] is True and result["score"]["label"] == "contains"
+    assert result["metadata"]["passed"] is True and result["metadata"]["label"] == "contains"
     assert result["cost_usd"] > 0 and result["id"]
 
 
 def test_a_scorer_can_be_a_bare_name(client):
-    assert run_eval(client, scorer="non_empty")["score"]["passed"] is True
+    assert run_eval(client, scorer="non_empty")["metadata"]["passed"] is True
 
 
 def test_a_list_of_scorers_is_scored_as_a_conjunction(client):
     result = run_eval(client, scorer=["non_empty", {"type": "contains", "value": "ECB"}])
-    assert result["score"]["label"] == "all_of"
-    assert len(result["score"]["details"]["parts"]) == 2
+    assert result["metadata"]["label"] == "all_of"
+    assert len(result["metadata"]["parts"]) == 2
 
 
 def test_an_llm_judge_runs_against_the_shared_client(client):
     result = run_eval(client, scorer={"type": "llm_judge",
                                       "rubric": "Every claim carries its URL."})
-    assert result["score"]["value"] == 0.8 and result["score"]["notes"]
+    assert result["score"] == 0.8 and result["comments"]
 
 
 @pytest.mark.parametrize("scorer", ["invented", {"type": "invented"}, {"value": "x"}, 42])
@@ -73,14 +73,14 @@ def test_the_trace_is_off_by_default(client):
 def test_the_expected_answer_is_carried_through(client):
     result = run_eval(client, expected="about 130 tuners",
                       scorer={"type": "llm_judge", "rubric": "Is it close?"})
-    assert result["score"]["passed"] is True
+    assert result["metadata"]["passed"] is True
 
 
 def test_a_failing_agent_is_still_a_scored_result(client):
     result = run_eval(client, agent="pipeline", prompt="Did the ECB cut rates?",
                       scorer="completed", max_usd=0.002, cache=False)
     assert result["ok"] is False and result["error_kind"] == "budget"
-    assert result["score"]["value"] == 0.0
+    assert result["score"] == 0.0
 
 
 def test_max_spend_mode_scores_the_bailout_answer(client):
@@ -88,7 +88,7 @@ def test_max_spend_mode_scores_the_bailout_answer(client):
                       scorer="completed", max_usd=0.002, cache=False, max_spend_mode=True)
     assert result["error_kind"] == "max_spend" and result["bailed_out"] is True
     assert result["output"], "there is an answer to score"
-    assert result["score"]["value"] == 0.5, "an answered cut-off beats a dead run"
+    assert result["score"] == 0.5, "an answered cut-off beats a dead run"
 
 
 # --- storing and reading back ------------------------------------------------
@@ -101,8 +101,10 @@ def test_a_result_is_stored_and_fetchable(client):
 
 
 def test_save_false_keeps_it_out_of_the_store(client):
+    """An id is a fact about having been stored, so an unsaved run has none."""
     result = run_eval(client, save=False)
-    assert client.get(f"/api/evals/{result['id']}").status_code == 404
+    assert result["id"] == ""
+    assert result["score"] is not None, "it still ran and still scored"
     assert client.get("/api/evals").json()["total"] == 0
 
 
@@ -139,7 +141,7 @@ def test_the_leaderboard_aggregates_stored_results(client):
     run_eval(client, prompt="another question", scorer={"type": "contains", "value": "nowhere"})
     board = client.get("/api/evals/leaderboard").json()
     assert board[0]["agent"] == "fermi"
-    assert board[0]["evals"] == 2 and board[0]["mean_score"] == 0.5
+    assert board[0]["runs"] == 2 and board[0]["mean_score"] == 0.5
 
 
 # --- suites -----------------------------------------------------------------
@@ -155,7 +157,7 @@ def test_a_suite_runs_every_case_against_every_agent(client):
     })
     assert body.status_code == 200, body.text
     suite = body.json()
-    assert suite["evals"] == 4 and suite["name"] == "compare"
+    assert suite["count"] == 4 and suite["name"] == "compare"
     # The harness's own name, not the catalogue id — "plugin" is
     # "researcher-plugin". The id is kept in metadata.
     assert {r["agent"] for r in suite["results"]} == {"fermi", "researcher-plugin"}
@@ -168,16 +170,17 @@ def test_the_catalogue_id_is_recorded_alongside_the_harness_name(client):
     assert result["metadata"]["agent_id"] == "plugin"
 
 
-def test_a_suite_is_stored_and_fetchable(client):
+def test_a_suite_stores_its_results_rather_than_itself(client):
+    """A suite is a gather over evals, not an object. What is worth keeping is
+    the results — a suite id would only point back at a grouping of them."""
     suite = client.post("/api/evals/suite", json={
-        "agents": ["fermi"], "cases": [{"prompt": FERMI, "scorer": "non_empty"}],
+        "agents": ["fermi"], "cases": [{"prompt": FERMI, "scorer": "non_empty"},
+                                       {"prompt": "And again?", "scorer": "non_empty"}],
         "model": "test/model",
     }).json()
-    listed = client.get("/api/evals/suites").json()
-    assert [s["id"] for s in listed] == [suite["id"]]
-    fetched = client.get(f"/api/evals/suites/{suite['id']}").json()
-    assert fetched["evals"] == 1 and fetched["results"][0]["agent"] == "fermi"
-    assert client.get("/api/evals").json()["total"] == 1, "its results are stored too"
+    assert suite["count"] == 2
+    assert all(one["id"] for one in suite["results"]), "each result is stored"
+    assert client.get("/api/evals").json()["total"] == 2
 
 
 def test_an_unknown_suite_is_a_404(client):
