@@ -13,6 +13,10 @@ to whatever is doing the travelling rather than here.
     out = await ev.run()
     out.score       # the number the arena ranks on
     out.comments    # why, in a sentence
+
+An eval whose answer is not available yet scores separately from the run that
+produced it — ``await ev.score(recorded)`` — which is how a forecast made hours
+ago is graded once the match it was about has finished.
 """
 
 from __future__ import annotations
@@ -67,7 +71,27 @@ class Eval:
         self.input = dict(input or {})
         #: The last run's raw agent output, kept so a caller can inspect the
         #: trace behind a score without threading it through the return value.
+        #: ``None`` for an eval that scores something recorded earlier.
         self.agent_output: AgentResult | None = None
+
+    async def score(self, agent_output: Any) -> EvalOutput:
+        """Score an output the agent already produced.
+
+        Not every eval can run its agent at the moment it scores. A forecast
+        about the next five minutes is only answerable five minutes later, and
+        one about a match is only answerable after the whistle — by which time
+        the run is hours gone and lives in a file. Those evals score what was
+        recorded, and running an agent to re-derive it would be both wrong and
+        expensive.
+
+        :meth:`run` is this with the run in front of it.
+        """
+        out = self.eval_function(agent_output)
+        if inspect.isawaitable(out):
+            out = await out
+        if self.description and not out.description:
+            out = out.model_copy(update={"description": self.description})
+        return out
 
     async def run(self, **overrides: Any) -> EvalOutput:
         """Run the agent on ``input`` and score what comes back.
@@ -78,13 +102,7 @@ class Eval:
         merged = {**self.input, **overrides}
         question = merged.pop("question", None)
         self.agent_output = await self.agent.run(question, **merged)
-        out = self.eval_function(self.agent_output)
-        if inspect.isawaitable(out):
-            out = await out
-        # An eval that names itself saves every caller from labelling results.
-        if self.description and not out.description:
-            out = out.model_copy(update={"description": self.description})
-        return out
+        return await self.score(self.agent_output)
 
     def __repr__(self) -> str:
         return f"Eval(agent={self.agent.name!r}, description={self.description!r})"
