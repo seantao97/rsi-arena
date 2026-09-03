@@ -80,7 +80,17 @@ def render(template: str, state: dict[str, Any], *, strict: bool = True) -> str:
 
 
 def placeholders(template: str) -> list[str]:
+    """Every ``{{path}}`` a template reads, in full — ``a.b`` stays ``a.b``."""
     return sorted({m.group(1) for m in _PLACEHOLDER.finditer(template)})
+
+
+def reads(template: str) -> set[str]:
+    """The *root* names a template reads — ``{{a.b}}`` contributes ``a``.
+
+    The root is what matters when asking what a plan needs, because state is
+    flat: a step writes ``a``, and ``.b`` is indexing into it afterwards.
+    """
+    return {path.split(".", 1)[0] for path in placeholders(template)}
 
 
 # --- conditions -------------------------------------------------------------

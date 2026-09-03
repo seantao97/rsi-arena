@@ -21,7 +21,7 @@ from .cache import Cache, MemoryCache, NullCache, default_cache, make_key, set_d
 from .costs import BudgetExceeded, Cost, CostRecord, CostTracker, MaxSpendExceeded, Pricing, Usage
 from .ratelimit import RateLimit, RateLimiter, Unlimited
 from .retry import Attempt, FatalError, RetryableError, RetryPolicy, with_retry
-from .template import ConditionError, evaluate, placeholders, render
+from .template import ConditionError, evaluate, placeholders, reads, render
 from .trace import Span, Trace, Tracer, current_span
 
 __all__ = [
@@ -30,6 +30,6 @@ __all__ = [
     "BudgetExceeded", "MaxSpendExceeded", "Cost", "CostRecord", "CostTracker", "Pricing", "Usage",
     "RateLimit", "RateLimiter", "Unlimited",
     "Attempt", "FatalError", "RetryableError", "RetryPolicy", "with_retry",
-    "ConditionError", "evaluate", "placeholders", "render",
+    "ConditionError", "evaluate", "placeholders", "reads", "render",
     "Span", "Trace", "Tracer", "current_span",
 ]

@@ -25,7 +25,7 @@ from typing import Annotated, Any, Callable, Literal, Union
 from pydantic import BaseModel, Field
 
 from ..core.costs import CostTracker
-from ..core.template import evaluate, render
+from ..core.template import evaluate, reads as template_reads, render
 from ..core.trace import Tracer
 from ..llm import LLMClient, LLMConfig, Message, WebSearch, parse_json_loose
 from .tools import Toolbox
@@ -101,6 +101,12 @@ class StepContext:
         return {k: v for k, v in settings.items() if v is not None}
 
 
+#: Supplied by the runtime rather than the caller: the question the agent was
+#: asked, and the counters a loop injects into its own body.
+BUILT_IN_INPUTS = frozenset({"question", "state", "now",
+                             "loop_index", "loop_iteration", "loop_results"})
+
+
 class Step(BaseModel):
     """Base for every step. Subclasses implement :meth:`run`."""
 
@@ -108,6 +114,13 @@ class Step(BaseModel):
     name: str = ""
     description: str = ""
     output_key: str | None = None
+
+    def reads(self) -> set[str]:
+        """Names this step interpolates. Overridden where a step has templates."""
+        return set()
+
+    def writes(self) -> set[str]:
+        return {self.output_key} if self.output_key else set()
     skip_if: str | None = Field(
         default=None,
         description="Restricted expression; when it evaluates true the step is skipped.",
@@ -288,6 +301,8 @@ class PromptStep(Step):
             ctx.messages = [*messages, completion.message]
         return parse_json_loose(completion.text) if self.output_schema else completion.text
 
+    def reads(self) -> set[str]:
+        return template_reads(self.prompt)
 
 class ToolStep(Step):
     """Call one tool with fixed arguments, templated from state.
@@ -327,6 +342,12 @@ class ToolStep(Step):
             raise RuntimeError(f"tool {self.tool} failed: {result.error}")
         return result.raw_output if result.ok else {"error": result.error}
 
+    def reads(self) -> set[str]:
+        found: set[str] = set()
+        for value in self.args.values():
+            if isinstance(value, str):
+                found |= template_reads(value)
+        return found
 
 class LoopStep(Step):
     """Run inner steps until a condition holds or ``max_loops`` is spent.
@@ -354,6 +375,20 @@ class LoopStep(Step):
     collect: bool = Field(
         default=True, description="Return every iteration's result as a list."
     )
+
+
+    def reads(self) -> set[str]:
+        found = (template_reads(self.until or "")
+                 | template_reads(self.until_prompt or ""))
+        for step in self.steps:
+            found |= step.reads()
+        return found
+
+    def writes(self) -> set[str]:
+        found = {self.output_key} if self.output_key else set()
+        for step in self.steps:
+            found |= step.writes()
+        return found
 
     def _span_kind(self) -> str:
         return "loop"
@@ -434,7 +469,6 @@ AnyStep = Annotated[Union[PromptStep, ToolStep, LoopStep], Field(discriminator="
 
 LoopStep.model_rebuild()
 
-
 class Plan(BaseModel):
     """An ordered list of steps. Serialisable in both directions."""
 
@@ -448,6 +482,29 @@ class Plan(BaseModel):
 
     def __len__(self) -> int:
         return len(self.steps)
+
+    def reads(self) -> set[str]:
+        """Every name the plan interpolates, at any depth."""
+        found: set[str] = set()
+        for step in self.steps:
+            found |= step.reads()
+        return found
+
+    def writes(self) -> set[str]:
+        """Every name the plan puts into state itself."""
+        found: set[str] = set()
+        for step in self.steps:
+            found |= step.writes()
+        return found
+
+    def required_inputs(self) -> set[str]:
+        """What the caller must supply: what the plan reads and never writes.
+
+        A missing one is a ``KeyError`` from ``render`` at the step that reads
+        it — after the earlier steps have run and been paid for. Asking up front
+        turns that into a refusal before anything is spent.
+        """
+        return self.reads() - self.writes() - BUILT_IN_INPUTS
 
     def outline(self, indent: int = 0) -> str:
         lines = []

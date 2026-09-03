@@ -33,7 +33,7 @@ class ForecastConsistency(Eval):
 
     def __init__(self, agent=None, *, ticker: str = "", mode: str = "horizon",
                  tools=None, config=None, agent_name: str = "horizon",
-                 **inputs: Any) -> None:
+                 game: str = "", **inputs: Any) -> None:
         self.mode = mode
         self.ticker = ticker
         self.check = validate_horizon if mode == "horizon" else validate
@@ -41,7 +41,11 @@ class ForecastConsistency(Eval):
             agent or load_agent(agent_name, tools=tools, config=config),
             self.grade,
             description=f"{self.name}: {ticker} {mode}".strip(),
-            input={"question": ticker, **inputs},
+            # The supervisor knows the fixture and passes it; a caller that
+            # does not gets a thinner forecast rather than a KeyError. Eval
+            # checks this against the plan, so a config that starts reading a
+            # new name fails here instead of mid-run.
+            input={"question": ticker, "game": game or "unavailable", **inputs},
         )
 
     def grade(self, result: Any) -> EvalOutput:

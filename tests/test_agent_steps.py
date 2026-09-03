@@ -405,3 +405,48 @@ async def test_cache_off_on_the_agent_reaches_a_shared_client(llm, toolbox, fake
     await PromptStep(name="ask", prompt="the same prompt").execute(ctx)
     await PromptStep(name="ask", prompt="the same prompt").execute(ctx)
     assert fake.llm_calls == 2, "cache=False on the agent must beat cache=True on the client"
+
+
+# --- what a plan needs before it runs ----------------------------------------
+
+
+def test_a_plan_reports_what_the_caller_must_supply() -> None:
+    """A name a step interpolates and no step writes has to come from outside.
+    Asking up front turns a KeyError four steps in — after the earlier steps
+    have run and been paid for — into a refusal that costs nothing."""
+    plan = Plan(steps=[
+        ToolStep(name="quote", tool="t", args={"ticker": "{{question}}"},
+                 output_key="quote"),
+        PromptStep(name="say", prompt="Book {{quote}}, game {{game}}",
+                   output_key="said"),
+    ])
+    assert plan.required_inputs() == {"game"}
+    assert plan.writes() == {"quote", "said"}
+
+
+def test_the_question_is_not_a_required_input() -> None:
+    """It is what the agent was asked, supplied by the runtime."""
+    plan = Plan(steps=[PromptStep(name="a", prompt="{{question}}", output_key="a")])
+    assert plan.required_inputs() == set()
+
+
+def test_a_loop_counter_is_not_a_required_input() -> None:
+    """`loop_results` and friends are injected into a loop body by the loop."""
+    plan = Plan(steps=[LoopStep(
+        name="research", max_iterations=2, output_key="evidence",
+        steps=[PromptStep(name="gather", prompt="so far: {{loop_results}}",
+                          output_key="gathered")])])
+    assert plan.required_inputs() == set()
+
+
+def test_a_nested_step_still_declares_what_it_reads() -> None:
+    plan = Plan(steps=[LoopStep(
+        name="loop", max_iterations=1, output_key="out",
+        steps=[PromptStep(name="inner", prompt="{{outside}}", output_key="x")])])
+    assert plan.required_inputs() == {"outside"}
+
+
+def test_only_the_root_of_a_dotted_name_counts() -> None:
+    """State is flat: a step writes `quote`, and `.mid` indexes into it."""
+    plan = Plan(steps=[PromptStep(name="a", prompt="{{quote.mid}}", output_key="a")])
+    assert plan.required_inputs() == {"quote"}
