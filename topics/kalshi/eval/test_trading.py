@@ -1,4 +1,4 @@
-"""``topics.kalshi.run.trading`` — the parts that broke in production.
+"""``topics.kalshi.eval.trading`` — the parts that broke in production.
 
 Each of these exists because it went wrong live, in a way that reading the diff
 did not catch.
@@ -28,7 +28,7 @@ def test_agent_builds_with_no_toolbox_supplied() -> None:
     agent = load_agent("horizon")
     assert [step.name for step in agent.plan.steps] == \
         ["quote", "path", "tape", "predict"]
-    assert {tool.name for tool in agent.tools} == \
+    assert set(agent.tools) == \
         {"market_quote", "candlesticks", "previous_trades"}
 
 

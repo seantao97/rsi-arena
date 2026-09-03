@@ -32,7 +32,9 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from rsi_arena import Eval, EvalSuite
+import asyncio
+
+from rsi_arena import Eval, EvalOutput, scored_by
 from rsi_arena.evals import SCORERS, scorer_from_spec
 
 from .catalogue import build
@@ -122,10 +124,33 @@ def _scorer(spec: Any) -> Any:
         raise HTTPException(400, f"bad scorer: {exc}") from None
 
 
-def _render(result: Any, include_trace: bool) -> dict[str, Any]:
-    payload = result.model_dump(exclude={"trace"})
-    if include_trace and result.trace is not None:
-        payload["trace"] = result.trace.model_dump()
+def _render(ev: Eval, out: Any, include_trace: bool,
+            eval_id: str = "") -> dict[str, Any]:
+    """One eval, as the API returns it.
+
+    The verdict and the run are separate objects now — ``EvalOutput`` is the
+    score and why, and everything about the run that produced it (cost, errors,
+    the trace) is on the agent result. The response flattens the two, because a
+    caller asking "how did it do" wants both.
+    """
+    run = ev.agent_output
+    payload = {
+        "id": eval_id,
+        "name": ev.description,
+        "agent": ev.agent.name,
+        "prompt": ev.input.get("question", ""),
+        **out.model_dump(),
+        "ok": bool(run and run.error is None),
+        "error": getattr(run, "error", None),
+        "error_kind": getattr(run, "error_kind", None),
+        "bailed_out": bool(getattr(run, "bailed_out", False)),
+        # Cost lives on the trace, which is where it is actually tracked;
+        # the verdict has no business carrying a bill.
+        "cost_usd": (run.trace.costs.total_usd
+                     if run is not None and run.trace else 0.0),
+    }
+    if include_trace and run is not None and getattr(run, "trace", None):
+        payload["trace"] = run.trace.model_dump()
     return payload
 
 
@@ -164,20 +189,20 @@ async def run_eval(req: EvalRequest) -> dict[str, Any]:
     agent = build(req.agent, _limits(req).config(), state.api)
     ev = Eval(
         agent,
-        req.prompt,
-        scorer,
-        name=req.name or f"{req.agent}:{req.prompt[:40]}",
-        expected=req.expected,
-        inputs=req.inputs,
-        # The catalogue id and the agent's own name differ ("plugin" is
-        # "researcher-plugin"), and a stored result should be traceable back to
-        # the request that made it, not only to the harness that ran.
-        metadata={**req.metadata, "agent_id": req.agent},
-        keep_trace=True,
-        store=state.evals,
+        scored_by(scorer, prompt=req.prompt, agent=agent, llm=state.llm,
+                  expected=req.expected),
+        description=req.name or f"{req.agent}:{req.prompt[:40]}",
+        input={"question": req.prompt, **req.inputs},
     )
-    result = await ev.run(llm=state.llm, save=req.save)
-    return _render(result, req.include_trace)
+    out = await ev.run(llm=state.llm)
+    # The catalogue id and the agent's own name differ ("plugin" is
+    # "researcher-plugin"), and a stored result should be traceable back to the
+    # request that made it, not only to the harness that ran.
+    out.metadata.update({**req.metadata, "agent_id": req.agent})
+    eval_id = ""
+    if req.save:
+        eval_id = await state.evals.save(out, agent=req.agent, name=ev.description)
+    return _render(ev, out, req.include_trace, eval_id)
 
 
 @router.post("/evals/suite")
@@ -195,26 +220,43 @@ async def run_suite(req: SuiteRequest) -> dict[str, Any]:
 
     limits = _limits(req)
     scorers_by_case = [_scorer(case.scorer) for case in req.cases]
-    evals = [
-        Eval(
-            build(agent_id, limits.config(), state.api),
-            case.prompt,
-            scorer,
-            name=case.name or f"{agent_id}:{index}",
-            expected=case.expected,
-            metadata={"agent_id": agent_id},
-            keep_trace=req.include_trace,
-            store=state.evals,
-        )
+    pairs = [
+        (agent_id,
+         Eval(build(agent_id, limits.config(), state.api),
+              scored_by(scorer, prompt=case.prompt, llm=state.llm,
+                        expected=case.expected),
+              description=case.name or f"{agent_id}:{index}",
+              input={"question": case.prompt}))
         for agent_id in req.agents
         for index, (case, scorer) in enumerate(zip(req.cases, scorers_by_case))
     ]
-    suite = EvalSuite(evals, name=req.name or "suite", concurrency=req.concurrency,
-                      store=state.evals)
-    result = await suite.run(llm=state.llm, save=req.save)
+
+    # A suite is a gather over evals. It was a class; nothing it did needed to
+    # be one, and a failed member has to become a result rather than take the
+    # request down with it.
+    limit = asyncio.Semaphore(max(1, req.concurrency))
+
+    async def one(agent_id: str, ev: Eval) -> dict[str, Any]:
+        async with limit:
+            try:
+                out = await ev.run(llm=state.llm)
+            except Exception as exc:  # noqa: BLE001 — a failure is a data point
+                out = EvalOutput(description=ev.description, score=0.0,
+                                 comments=f"{type(exc).__name__}: {exc}")
+            eval_id = ""
+            if req.save:
+                eval_id = await state.evals.save(out, agent=agent_id,
+                                                 name=ev.description)
+            return _render(ev, out, req.include_trace, eval_id)
+
+    results = await asyncio.gather(*(one(a, e) for a, e in pairs))
+    scores = [r["score"] for r in results]
     return {
-        **result.aggregate(),
-        "results": [_render(one, req.include_trace) for one in result.results],
+        "name": req.name or "suite",
+        "count": len(results),
+        "mean_score": sum(scores) / len(scores) if scores else 0.0,
+        "cost_usd": sum(r["cost_usd"] for r in results),
+        "results": results,
     }
 
 
@@ -240,27 +282,13 @@ async def eval_leaderboard(name: str | None = None) -> list[dict[str, Any]]:
     return await state.evals.leaderboard(name=name)
 
 
-@router.get("/evals/suites")
-async def list_suites(
-    limit: int = Query(default=25, ge=1, le=200), offset: int = Query(default=0, ge=0)
-) -> list[dict[str, Any]]:
-    return [s.aggregate() for s in await state.evals.list_suites(limit=limit, offset=offset)]
-
-
-@router.get("/evals/suites/{suite_id}")
-async def get_suite(suite_id: str) -> dict[str, Any]:
-    suite = await state.evals.get_suite(suite_id)
-    if suite is None:
-        raise HTTPException(404, f"unknown suite {suite_id!r}")
-    return {**suite.aggregate(), "results": [one.row() for one in suite.results]}
-
-
 @router.get("/evals/{eval_id}")
 async def get_eval(eval_id: str, include_trace: bool = False) -> dict[str, Any]:
-    result = await state.evals.get(eval_id)
-    if result is None:
+    record = await state.evals.get(eval_id)
+    if record is None:
         raise HTTPException(404, f"unknown eval {eval_id!r}")
-    return _render(result, include_trace)
+    # A stored result is the verdict only — the run behind it was not kept.
+    return {**record.row(), **record.output.model_dump()}
 
 
 @router.delete("/evals/{eval_id}")

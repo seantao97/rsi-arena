@@ -325,7 +325,7 @@ class ToolStep(Step):
         result = await ctx.tools.call(self.tool, self._render_args(ctx), tracer=ctx.tracer)
         if not result.ok and not self.fail_ok:
             raise RuntimeError(f"tool {self.tool} failed: {result.error}")
-        return result.output if result.ok else {"error": result.error}
+        return result.raw_output if result.ok else {"error": result.error}
 
 
 class LoopStep(Step):

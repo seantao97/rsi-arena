@@ -1,289 +1,231 @@
-"""``rsi_arena.evals.eval`` — one eval, a suite of them, and the store.
+"""``rsi_arena.evals`` — one eval, and where results go.
 
-The whole requirement in one line: a class that takes an agent, gives it a
-prompt, scores the text that comes back, and keeps the result.
+The whole requirement in one line: a class that takes an agent, runs it on an
+input, scores what came back, and hands you a number with a reason attached.
+
+An eval is the unit the arena ranks on, so the tests that matter are the ones
+about what survives the run — the score, why, what was said, and what it was
+supposed to be.
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
 
 import pytest
 
-from rsi_arena.agent import Agent, AgentConfig, ErrorKind, Plan, PromptStep
+from rsi_arena.agent import Agent, AgentConfig, Plan, PromptStep
 from rsi_arena.evals import (
     Eval,
-    EvalResult,
+    EvalOutput,
     EvalStore,
-    EvalSuite,
     InMemoryEvalStore,
-    Score,
-    completed,
+    StoredEval,
     contains,
-    default_eval_store,
     non_empty,
+    scored_by,
 )
 
 
-# --- one eval ---------------------------------------------------------------
+# --- helpers -----------------------------------------------------------------
 
 
-def test_the_constructor_resolves_the_scorer(simple_agent: Agent):
-    # Resolved here so a bad scorer raises before the agent spends anything.
-    ev = Eval(simple_agent, "a question", {"type": "contains", "value": "ecb"})
-    assert callable(ev.scorer)
+def always(score: float, **fields) -> object:
+    """An eval function with a fixed verdict."""
+    return lambda result: EvalOutput(score=score, **fields)
 
 
-def test_a_bad_scorer_raises_at_construction_not_after_a_paid_run(simple_agent: Agent):
-    with pytest.raises(KeyError):
-        Eval(simple_agent, "a question", "no_such_scorer")
+def echoes(result) -> EvalOutput:
+    """Score by what the agent actually said."""
+    said = str(result.output or "")
+    return EvalOutput(score=1.0 if said else 0.0, comments=said[:40],
+                      output={"answer": said})
 
 
-def test_the_name_defaults_to_the_agent_and_the_prompt(simple_agent: Agent):
-    assert Eval(simple_agent, "Did the ECB cut rates?", non_empty()).name.startswith("simple:")
-    assert Eval(simple_agent, "q", non_empty(), name="mine").name == "mine"
+# --- EvalOutput: the verdict --------------------------------------------------
 
 
-async def test_running_one_scores_the_agent_s_text(simple_agent: Agent, llm, fake):
-    result = await Eval(simple_agent, "Did the ECB cut rates?", contains("unchanged")).run(llm=llm)
-    assert isinstance(result, EvalResult)
-    assert result.agent == "simple" and result.prompt == "Did the ECB cut rates?"
-    assert result.output == fake.text
-    assert result.score.passed is True and result.score.label == "contains"
-    assert result.ok and result.cost_usd > 0 and result.run_id
+def test_an_output_needs_nothing_to_exist() -> None:
+    """Every field defaults, so a scorer can fill in only what it knows."""
+    out = EvalOutput()
+    assert out.score == 0.0
+    assert out.description == out.comments == ""
+    assert out.metadata == out.output == out.ground_truth == {}
 
 
-async def test_a_plain_function_works_as_the_scorer(simple_agent: Agent, llm):
-    result = await Eval(simple_agent, "q", lambda output: "ECB" in output).run(llm=llm)
-    assert result.score.passed is True
+def test_the_answer_and_what_it_should_have_been_travel_together() -> None:
+    """The commonest question about a low score is not what it scored but what
+    it said, against what. Both are on the result, so neither needs a re-run."""
+    out = EvalOutput(score=0.0, output={"answer": "1998"},
+                     ground_truth={"answer": "1996"})
+    assert out.output["answer"] != out.ground_truth["answer"]
 
 
-async def test_the_expected_answer_reaches_the_scorer(simple_agent: Agent, llm):
-    def scorer(output: str, ctx) -> bool:
-        return ctx.expected == "rates held"
+# --- Eval: the unit -----------------------------------------------------------
 
-    result = await Eval(simple_agent, "q", scorer, expected="rates held").run(llm=llm)
-    assert result.score.passed is True
 
+def test_an_eval_holds_the_five_things_it_was_given(simple_agent: Agent) -> None:
+    fn = always(1.0)
+    ev = Eval(simple_agent, fn, description="a name", input={"question": "hi"})
+    assert ev.agent is simple_agent
+    assert ev.eval_function is fn
+    assert ev.description == "a name"
+    assert ev.input == {"question": "hi"}
+    assert ev.agent_output is None       # nothing has run yet
 
-async def test_extra_inputs_are_passed_to_the_run(simple_agent: Agent, llm, fake):
-    simple_agent.plan.steps[0].prompt = "{{question}} for {{audience}}"
-    await Eval(simple_agent, "explain", non_empty(), inputs={"audience": "a child"}).run(llm=llm)
-    assert "a child" in fake.bodies[-1]["messages"][-1]["content"]
 
+async def test_running_scores_what_the_agent_said(simple_agent: Agent, llm) -> None:
+    ev = Eval(simple_agent, echoes, input={"question": "Say hello."})
+    out = await ev.run(llm=llm)
+    assert out.score == 1.0
+    assert out.output["answer"]
 
-async def test_a_failing_agent_is_a_data_point_not_an_exception(config: AgentConfig, llm):
-    broken = Agent(name="broken", context="", config=config,
-                   plan=Plan(steps=[PromptStep(name="a", prompt="{{nowhere}}")]))
-    result = await Eval(broken, "q", non_empty()).run(llm=llm)
-    assert result.ok is False and result.error_kind is ErrorKind.PLAN
-    assert result.score.passed is False, "no output means the scorer fails it"
 
+async def test_the_run_is_kept_so_a_score_can_be_traced(simple_agent: Agent, llm) -> None:
+    """A score with no way back to the run that produced it cannot be argued
+    with, which is most of what a leaderboard is for."""
+    ev = Eval(simple_agent, echoes, input={"question": "Say hello."})
+    await ev.run(llm=llm)
+    assert ev.agent_output is not None
+    assert ev.agent_output.trace is not None
 
-async def test_a_dict_output_is_scored_as_json_text(config: AgentConfig, llm):
-    agent = Agent(name="structured", context="", config=config, plan=Plan(steps=[
-        PromptStep(name="answer", prompt="q",
-                   output_schema={"type": "object",
-                                  "properties": {"answer": {"type": "string"}},
-                                  "required": ["answer"], "additionalProperties": False}),
-    ]))
-    result = await Eval(agent, "q", contains('"answer"')).run(llm=llm)
-    assert result.score.passed is True
-    assert json.loads(result.output)["answer"] == "42"
 
+async def test_an_eval_names_its_own_results(simple_agent: Agent, llm) -> None:
+    """Otherwise every caller labels them, and most forget."""
+    ev = Eval(simple_agent, always(1.0), description="the name",
+              input={"question": "hi"})
+    assert (await ev.run(llm=llm)).description == "the name"
 
-async def test_the_trace_is_kept_by_default_and_droppable(simple_agent: Agent, llm):
-    kept = await Eval(simple_agent, "q", non_empty()).run(llm=llm)
-    assert kept.trace is not None and kept.trace.root.name == "simple"
-    dropped = await Eval(simple_agent, "q", non_empty(), keep_trace=False).run(llm=llm)
-    assert dropped.trace is None
 
+async def test_a_scorer_that_names_itself_is_left_alone(simple_agent: Agent, llm) -> None:
+    ev = Eval(simple_agent, always(1.0, description="its own"),
+              description="the eval's", input={"question": "hi"})
+    assert (await ev.run(llm=llm)).description == "its own"
 
-async def test_a_result_serialises_and_flattens_to_a_row(simple_agent: Agent, llm):
-    result = await Eval(simple_agent, "q", contains("ECB")).run(llm=llm)
-    json.dumps(result.model_dump(mode="json"))
-    row = result.row()
-    assert set(row) >= {"id", "agent", "score", "passed", "cost_usd", "error_kind"}
-    json.dumps(row)
 
+async def test_overrides_beat_the_stored_input(simple_agent: Agent, llm) -> None:
+    """Running one eval across a sweep of questions is the whole reason the
+    input is held rather than passed."""
+    seen = {}
 
-def test_passed_falls_back_to_the_number_when_there_is_no_verdict():
-    assert EvalResult(score=Score(value=0.9)).passed is True
-    assert EvalResult(score=Score(value=0.0)).passed is False
+    def watch(result) -> EvalOutput:
+        seen["question"] = result.trace.root.input
+        return EvalOutput(score=1.0)
 
+    ev = Eval(simple_agent, watch, input={"question": "the original"})
+    await ev.run(question="the override", llm=llm)
+    assert "override" in str(seen["question"])
 
-# --- eval-level ceilings ----------------------------------------------------
 
+async def test_a_plain_function_is_a_valid_eval_function(simple_agent: Agent, llm) -> None:
+    """No registry, no base class. A scorer is ordinary code."""
+    out = await Eval(simple_agent, lambda r: EvalOutput(score=0.5),
+                     input={"question": "hi"}).run(llm=llm)
+    assert out.score == 0.5
 
-async def test_an_eval_can_tighten_the_ceiling_without_mutating_the_agent(simple_agent: Agent,
-                                                                          llm):
-    original = simple_agent.config.max_usd
-    await Eval(simple_agent, "q", non_empty(), max_usd=0.0001).run(llm=llm)
-    assert simple_agent.config.max_usd == original, "a suite shares one agent object"
 
+# --- scored_by: the built-in scorers still work -------------------------------
 
-async def test_max_spend_mode_is_scored_as_a_bailout(config: AgentConfig, toolbox, llm, fake):
-    agent = Agent(name="spender", context="", tools=toolbox, config=config, plan=Plan(steps=[
-        PromptStep(name="research", prompt="Research {{question}}", output_key="notes"),
-        PromptStep(name="more", prompt="More on {{notes}}", output_key="deeper"),
-        PromptStep(name="write", prompt="Write {{deeper}}"),
-    ]))
-    result = await Eval(agent, "q", completed(), max_usd=0.0015,
-                        max_spend_mode=True).run(llm=llm)
 
-    assert result.bailed_out is True
-    assert result.error_kind is ErrorKind.MAX_SPEND
-    assert result.output == fake.text, "there is an answer to score"
-    assert result.score.value == 0.5, "an answered cut-off beats a dead run"
-
-
-async def test_without_max_spend_mode_the_same_ceiling_scores_zero(config: AgentConfig, toolbox,
-                                                                   llm):
-    agent = Agent(name="spender", context="", tools=toolbox, config=config, plan=Plan(steps=[
-        PromptStep(name="research", prompt="Research {{question}}", output_key="notes"),
-        PromptStep(name="more", prompt="More on {{notes}}", output_key="deeper"),
-    ]))
-    result = await Eval(agent, "q", completed(), max_usd=0.0015).run(llm=llm)
-    assert result.error_kind is ErrorKind.BUDGET and result.score.value == 0.0
-
-
-# --- storing ----------------------------------------------------------------
-
-
-async def test_a_run_is_stored_by_default(simple_agent: Agent, llm, eval_store):
-    result = await Eval(simple_agent, "q", non_empty()).run(llm=llm)
-    assert await eval_store.get(result.id) is not None
-    assert default_eval_store() is eval_store
-
-
-async def test_saving_can_be_turned_off(simple_agent: Agent, llm, eval_store):
-    await Eval(simple_agent, "q", non_empty()).run(llm=llm, save=False)
-    assert await eval_store.count() == 0
-
-
-async def test_an_explicit_store_wins_over_the_default(simple_agent: Agent, llm, eval_store):
-    mine = InMemoryEvalStore()
-    result = await Eval(simple_agent, "q", non_empty(), store=mine).run(llm=llm)
-    assert await mine.get(result.id) is not None
-    assert await eval_store.count() == 0
-
-
-# --- suites -----------------------------------------------------------------
-
-
-async def test_a_suite_runs_every_eval_and_aggregates(simple_agent: Agent, llm):
-    suite = EvalSuite([
-        Eval(simple_agent, "q1", contains("ECB"), name="finds-ecb"),
-        Eval(simple_agent, "q2", contains("never appears"), name="impossible"),
-    ], name="demo")
-    result = await suite.run(llm=llm)
-
-    agg = result.aggregate()
-    assert agg["evals"] == 2 and agg["passed"] == 1 and agg["pass_rate"] == 0.5
-    assert agg["mean_score"] == 0.5 and agg["cost_usd"] > 0
-    assert agg["errors_by_kind"] == {}
-
-
-async def test_a_suite_stores_the_run_and_every_result(simple_agent: Agent, llm, eval_store):
-    suite = EvalSuite([Eval(simple_agent, "q1", non_empty()),
-                       Eval(simple_agent, "q2", non_empty())], name="demo")
-    result = await suite.run(llm=llm)
-    assert await eval_store.get_suite(result.id) is not None
-    assert await eval_store.count() == 2
-
-
-async def test_a_suite_saves_nothing_when_it_is_told_not_to(simple_agent: Agent, llm, eval_store):
-    await EvalSuite([Eval(simple_agent, "q", non_empty())]).run(llm=llm, save=False)
-    assert await eval_store.count() == 0
-
-
-async def test_over_crosses_agents_with_cases(simple_agent: Agent, config: AgentConfig, llm):
-    other = Agent(name="other", context="", config=config,
-                  plan=Plan(steps=[PromptStep(name="a", prompt="{{question}}")]))
-    suite = EvalSuite.over([simple_agent, other],
-                           [("q1", contains("ECB")), ("q2", non_empty())])
-    result = await suite.run(llm=llm)
-    assert len(result.results) == 4
-    assert {r.agent for r in result.results} == {"simple", "other"}
-
-
-async def test_a_suite_table_reads_as_a_table(simple_agent: Agent, llm):
-    result = await EvalSuite([Eval(simple_agent, "q", non_empty(), name="one")]).run(llm=llm)
-    table = result.table()
-    assert "one" in table and "simple" in table and "1 evals" in table
-
-
-async def test_concurrency_is_bounded(simple_agent: Agent, llm):
-    suite = EvalSuite([Eval(simple_agent, f"q{i}", non_empty()) for i in range(6)],
-                      concurrency=2)
-    result = await suite.run(llm=llm)
-    assert len(result.results) == 6 and all(r.ok for r in result.results)
-
-
-# --- the store --------------------------------------------------------------
-
-
-async def test_the_store_lists_newest_first_and_filters(eval_store: InMemoryEvalStore):
-    for index in range(3):
-        await eval_store.save(EvalResult(name=f"e{index}", agent="a" if index else "b",
-                                         created_at=100 + index))
-    assert [r.name for r in await eval_store.list()] == ["e2", "e1", "e0"]
-    assert [r.name for r in await eval_store.list(agent="b")] == ["e0"]
-    assert await eval_store.count(agent="a") == 2
-    assert [r.name for r in await eval_store.list(limit=1, offset=1)] == ["e1"]
-
-
-async def test_delete_and_clear(eval_store: InMemoryEvalStore):
-    result = EvalResult(name="one")
-    await eval_store.save(result)
-    assert await eval_store.delete(result.id) is True
-    assert await eval_store.delete(result.id) is False
-    await eval_store.save(EvalResult(name="two"))
-    await eval_store.clear()
-    assert await eval_store.count() == 0
-
-
-async def test_the_store_evicts_oldest_first(eval_store):
+async def test_a_built_in_scorer_can_be_adapted(simple_agent: Agent, llm) -> None:
+    """`scoring.py` answers with a Score — a value, a verdict and a note, which
+    is the same verdict in a narrower shape. Wrapping is a rename."""
+    out = await Eval(simple_agent, scored_by(non_empty()),
+                     input={"question": "Say hello."}).run(llm=llm)
+    assert out.score == 1.0
+    assert "passed" in out.metadata
+
+
+async def test_an_adapted_scorer_that_fails_scores_zero(simple_agent: Agent, llm) -> None:
+    out = await Eval(simple_agent, scored_by(contains("a string nobody says")),
+                     input={"question": "Say hello."}).run(llm=llm)
+    assert out.score == 0.0
+    assert out.metadata["passed"] is False
+
+
+# --- the store ----------------------------------------------------------------
+
+
+async def test_identity_belongs_to_the_store_not_the_verdict() -> None:
+    """An EvalOutput is a verdict; an id is a fact about having stored one. So
+    an eval can be run and read with no store anywhere in the picture."""
+    assert not hasattr(EvalOutput(), "id")
+    store = InMemoryEvalStore()
+    eval_id = await store.save(EvalOutput(score=1.0), agent="a", name="n")
+    assert eval_id and (await store.get(eval_id)).output.score == 1.0
+
+
+async def test_listing_is_newest_first_and_filters() -> None:
+    store = InMemoryEvalStore()
+    for i in range(3):
+        await store.save(EvalOutput(score=float(i)), agent="a" if i < 2 else "b",
+                         name="n")
+        await asyncio.sleep(0.001)          # created_at is a float clock
+    assert [r.output.score for r in await store.list()] == [2.0, 1.0, 0.0]
+    assert await store.count(agent="a") == 2
+    assert len(await store.list(agent="b")) == 1
+
+
+async def test_the_store_is_bounded_and_evicts_oldest_first() -> None:
+    """A long-running server cannot be allowed to grow without end."""
     store = InMemoryEvalStore(max_results=2)
-    kept = [EvalResult(name=f"e{i}") for i in range(3)]
-    for result in kept:
-        await store.save(result)
-    assert await store.get(kept[0].id) is None
-    assert await store.get(kept[2].id) is not None
+    for i in range(4):
+        await store.save(EvalOutput(score=float(i)), agent="a")
+    assert await store.count() == 2
+    assert sorted(r.output.score for r in await store.list()) == [2.0, 3.0]
 
 
-async def test_the_leaderboard_is_counts_not_a_rating(eval_store: InMemoryEvalStore):
-    await eval_store.save(EvalResult(agent="a", score=Score(value=1.0, passed=True),
-                                     cost_usd=0.01))
-    await eval_store.save(EvalResult(agent="a", score=Score(value=0.0, passed=False),
-                                     cost_usd=0.02))
-    await eval_store.save(EvalResult(agent="b", score=Score(value=1.0, passed=True),
-                                     cost_usd=0.03, bailed_out=True, ok=False))
-    board = await eval_store.leaderboard()
-    by_agent = {row["agent"]: row for row in board}
-    assert by_agent["a"]["mean_score"] == 0.5 and by_agent["a"]["pass_rate"] == 0.5
-    assert by_agent["a"]["cost_usd"] == pytest.approx(0.03)
-    assert by_agent["b"]["bailed_out"] == 1 and by_agent["b"]["errors"] == 1
-    assert board[0]["agent"] == "b", "sorted by mean score"
+async def test_delete_and_clear() -> None:
+    store = InMemoryEvalStore()
+    eval_id = await store.save(EvalOutput(), agent="a")
+    assert await store.delete(eval_id) is True
+    assert await store.delete(eval_id) is False
+    await store.save(EvalOutput(), agent="a")
+    await store.clear()
+    assert await store.count() == 0
 
 
-def test_the_store_interface_is_abstract():
+async def test_the_leaderboard_is_counts_not_a_rating() -> None:
+    """Mean score per agent, best first. It says what happened; it does not
+    model skill, and calling it a rating would imply it did."""
+    store = InMemoryEvalStore()
+    for score in (1.0, 1.0):
+        await store.save(EvalOutput(score=score), agent="good", name="n")
+    for score in (0.0, 1.0):
+        await store.save(EvalOutput(score=score), agent="mixed", name="n")
+    table = await store.leaderboard(name="n")
+    assert [row["agent"] for row in table] == ["good", "mixed"]
+    assert table[0]["mean_score"] == 1.0 and table[0]["runs"] == 2
+    assert table[1]["mean_score"] == 0.5
+
+
+async def test_a_row_carries_the_score_without_the_payload() -> None:
+    """A listing of a thousand results should not drag a thousand traces."""
+    store = InMemoryEvalStore()
+    eval_id = await store.save(
+        EvalOutput(score=0.5, comments="why", output={"big": "payload"}),
+        agent="a", name="n")
+    row = (await store.get(eval_id)).row()
+    assert row["score"] == 0.5 and row["comments"] == "why"
+    assert "output" not in row
+
+
+def test_the_store_interface_is_abstract() -> None:
     with pytest.raises(TypeError):
-        EvalStore()  # type: ignore[abstract]
+        EvalStore()                          # type: ignore[abstract]
 
 
-async def test_a_custom_store_drops_straight_in(simple_agent: Agent, llm):
-    """The seam a database arrives through: implement six methods, nothing else changes."""
+async def test_a_custom_store_drops_straight_in() -> None:
+    """Async throughout so a real database is a subclass, not a rewrite."""
 
-    class ListStore(InMemoryEvalStore):
-        def __init__(self) -> None:
-            super().__init__()
-            self.saved: list[str] = []
+    class Counting(InMemoryEvalStore):
+        saves = 0
 
-        async def save(self, result):
-            self.saved.append(result.id)
-            return await super().save(result)
+        async def save(self, output, *, agent="", name=""):
+            type(self).saves += 1
+            return await super().save(output, agent=agent, name=name)
 
-    store = ListStore()
-    result = await Eval(simple_agent, "q", non_empty(), store=store).run(llm=llm)
-    assert store.saved == [result.id]
+    store = Counting()
+    await store.save(EvalOutput())
+    assert Counting.saves == 1
+    assert isinstance(await store.list(), list)

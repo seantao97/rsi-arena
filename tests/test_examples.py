@@ -93,27 +93,38 @@ async def test_every_sample_agent_round_trips_through_json(agents, tools: Toolbo
 
 async def test_the_eval_example_runs_end_to_end(config: AgentConfig, api: APIClient,
                                                 llm: LLMClient):
+    """Every agent against every case, which is a gather rather than a class."""
+    import asyncio
+
     from examples import evals as eval_example
-    from rsi_arena import EvalSuite
+    from rsi_arena import Eval, scored_by
 
     agents = eval_example.build_agents(["fermi", "plugin"], config, api)
-    suite = EvalSuite.over(agents, eval_example.CASES, name="samples")
-    result = await suite.run(llm=llm)
+    evals = [Eval(agent, scored_by(scorer, prompt=prompt, agent=agent),
+                  description=f"{agent.name}:{index}", input={"question": prompt})
+             for agent in agents
+             for index, (prompt, scorer) in enumerate(eval_example.CASES)]
+    outputs = await asyncio.gather(*(ev.run(llm=llm) for ev in evals))
 
-    assert len(result.results) == len(agents) * len(eval_example.CASES)
-    agg = result.aggregate()
-    assert agg["evals"] == len(result.results) and agg["cost_usd"] > 0
-    assert result.table()
+    assert len(outputs) == len(agents) * len(eval_example.CASES)
+    assert all(out.description for out in outputs)
+    assert sum(ev.agent_output.trace.costs.total_usd for ev in evals) > 0
 
 
 async def test_the_eval_example_records_a_bailout_under_max_spend(config: AgentConfig,
                                                                   api: APIClient, llm: LLMClient):
+    """A run that hits its ceiling and answers from state is still a result. The
+    fact that it bailed is on the run, not the verdict — an eval scores what was
+    said, and why it stopped is a property of how it was said."""
     from examples import evals as eval_example
-    from rsi_arena import EvalSuite
+    from rsi_arena import Eval, scored_by
 
     tight = config.model_copy(update={"max_usd": 0.002, "cache": False, "max_spend_mode": True})
-    agents = eval_example.build_agents(["pipeline"], tight, api)
-    result = await EvalSuite.over(agents, eval_example.CASES[:1]).run(llm=llm)
+    agent = eval_example.build_agents(["pipeline"], tight, api)[0]
+    prompt, scorer = eval_example.CASES[0]
+    ev = Eval(agent, scored_by(scorer, prompt=prompt, agent=agent),
+              input={"question": prompt})
 
-    assert result.results[0].bailed_out is True
-    assert result.aggregate()["bailed_out"] == 1
+    out = await ev.run(llm=llm)
+    assert ev.agent_output.bailed_out is True
+    assert out.score is not None

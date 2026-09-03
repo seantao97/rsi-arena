@@ -24,16 +24,21 @@ Five things, and the dependency arrows only point one way:
 ```
 tools/    the 40 primitives a model may call, and the data layer they wrap
 agents/   JSON configs, one per harness — no Python at all
-run/      everything that drives them: loader, supervisor, trading rule, CLI
-eval/     everything that scores them: replay, verify, validation
+eval/     everything that runs and scores them
 README.md this
 ```
+
+Three things, and the reason there is no fourth: a harness is a config, the
+primitives it composes are fixed, and everything else exists to run it and say
+how it did. A `run/` beside `eval/` split that last job in half along a line
+that turned out not to be there — the supervisor drives evals, and the loop that
+scores a replayed window is the same loop that scores a live one.
 
 `agents/` holding only data is the point rather than tidiness. A config is
 something the arena can diff, version and mutate; once the same file also holds
 the loop that drives it, "the harness changed" stops meaning anything specific.
 So the plan, the prompt and the tool list are JSON, and the loop that keeps them
-forecasting is `run/supervisor.py`.
+forecasting is `eval/supervisor.py`.
 
 Inside `tools/`, **a leading underscore means machinery, not a primitive**:
 `_gamestate.py` reaches ESPN, `game_state.py` is the tool that wraps it;

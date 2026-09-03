@@ -69,7 +69,7 @@ def test_the_registry_becomes_a_toolbox() -> None:
     """The bridge to the runtime, which is what makes these usable at all."""
     box = kalshi_tools()
     assert len(box) == len(REGISTRY)
-    for tool in box:
+    for tool in box.values():
         schema = tool.to_openai_schema()["function"]
         assert schema["name"] and schema["description"]
         assert schema["parameters"]["type"] == "object"

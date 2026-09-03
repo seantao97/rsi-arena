@@ -1,4 +1,4 @@
-"""``topics.kalshi.run`` — that every documented command still exists.
+"""``topics.kalshi.eval`` — that every documented command still exists.
 
 Renaming a package moves the code and leaves the strings behind. When
 ``agents/`` became configs, eleven ``python -m topics.kalshi.agents...`` lines
@@ -20,13 +20,18 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 SOURCES = [HERE / "README.md", HERE / "workflow.yml", HERE / "__main__.py",
-           HERE / "supervisor.py", HERE / "slate.py",
-           HERE.parent / "README.md", HERE.parent / "agents" / "README.md",
+           HERE / "supervisor.py", HERE / "slate.py", HERE / "verify.py",
+           HERE / "verify_horizon.py", HERE.parent / "README.md",
+           HERE.parent / "agents" / "README.md",
            HERE.parent / "tools" / "README.md"]
 
 #: ``python -m some.module``, however it is wrapped — a timeout, a backslash
 #: continuation, a code fence.
 INVOCATION = re.compile(r"python -m ([\w.]+)")
+
+#: ``python path/to/script.py``. A moved file leaves these behind exactly the
+#: way a renamed package leaves module paths behind, and the workflow ran one.
+SCRIPT = re.compile(r"python ([\w/.-]+\.py)")
 
 
 def documented_modules() -> list[tuple[str, str]]:
@@ -37,6 +42,25 @@ def documented_modules() -> list[tuple[str, str]]:
         for module in INVOCATION.findall(path.read_text()):
             found.append((path.name, module))
     return sorted(set(found))
+
+
+def documented_scripts() -> list[tuple[str, str]]:
+    found = []
+    for path in SOURCES:
+        if not path.exists():
+            continue
+        for script in SCRIPT.findall(path.read_text()):
+            found.append((path.name, script))
+    return sorted(set(found))
+
+
+@pytest.mark.parametrize("source,script", documented_scripts(),
+                         ids=lambda v: v.replace("/", "-"))
+def test_a_documented_script_path_exists(source: str, script: str) -> None:
+    """The workflow ran `python topics/kalshi/run/preflight.py` after the file
+    moved to eval/. A module check would not have caught it."""
+    root = HERE.parent.parent.parent
+    assert (root / script).exists(), f"{source} runs {script}, which is not there"
 
 
 def test_there_are_invocations_to_check() -> None:

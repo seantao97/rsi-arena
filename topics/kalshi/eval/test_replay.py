@@ -57,16 +57,16 @@ def test_no_price_leaks_from_the_future() -> None:
     async def go() -> None:
         # Read the structure rather than the sentence: this is a check on the
         # data, and the sentence is written for a model.
-        quote = await tools.get("market_quote").aget_tool_output(ticker=TICKER)
+        quote = await tools["market_quote"].aget_tool_output(ticker=TICKER)
         assert quote.ok and quote.raw_output.get("mid") is not None
 
-        bars = await tools.get("candlesticks").aget_tool_output(
+        bars = await tools["candlesticks"].aget_tool_output(
             ticker=TICKER, hours_back=0.75)
         assert bars.ok and bars.raw_output["bars"]
         assert all(datetime.fromisoformat(b["ts"]) <= AT
                    for b in bars.raw_output["bars"])
 
-        tape = await tools.get("previous_trades").aget_tool_output(
+        tape = await tools["previous_trades"].aget_tool_output(
             ticker=TICKER, limit=12)
         assert tape.ok and tape.raw_output["trades"], "the tape must not fail silently"
         trades = tape.raw_output["trades"]

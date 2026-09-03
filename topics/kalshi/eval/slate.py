@@ -15,7 +15,7 @@ This asks both questions at once and says plainly which answer is which, so an
 empty afternoon can be told apart from a broken one before three hours are spent
 finding out.
 
-    python -m topics.kalshi.run.slate --league EPL,LALIGA,SERIEA,MLS
+    python -m topics.kalshi.eval.slate --league EPL,LALIGA,SERIEA,MLS
 """
 
 from __future__ import annotations

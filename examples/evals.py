@@ -31,7 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from examples import smoke_test, web_research  # noqa: E402
-from rsi_arena import AgentConfig, APIClient, EvalSuite, LLMClient  # noqa: E402
+from rsi_arena import AgentConfig, APIClient, Eval, LLMClient, scored_by  # noqa: E402
 from rsi_arena.evals import (  # noqa: E402
     all_of,
     completed,
@@ -109,29 +109,45 @@ async def main() -> int:
                  for prompt, scorer in cases]
     cases.append(("Did the ECB cut rates in July 2026?", under_cost(args.max_usd / 2)))
 
-    suite = EvalSuite.over(agents, cases, name="samples")
-    print(f"{len(suite.evals)} evals: {len(agents)} agents x {len(cases)} cases "
+    # Every agent against every case. A suite used to be a class; it is a list
+    # comprehension and an asyncio.gather, which is all it ever was.
+    evals = [
+        Eval(agent, scored_by(scorer, prompt=prompt, agent=agent),
+             description=f"{agent.name}:{index}", input={"question": prompt})
+        for agent in agents
+        for index, (prompt, scorer) in enumerate(cases)
+    ]
+    print(f"{len(evals)} evals: {len(agents)} agents x {len(cases)} cases "
           f"at ${args.max_usd:.2f} each\n")
 
     # One client for every eval: they share a rate limiter and a cache, so a
     # question two agents both search for is paid for once.
     async with LLMClient(config=config.to_llm_config(),
                          rate_limit=config.rate_limit()) as llm:
-        result = await suite.run(llm=llm)
+        outputs = await asyncio.gather(*(ev.run(llm=llm) for ev in evals))
     await api.close()
 
-    print(result.table())
-    print()
-    print(json.dumps(result.aggregate(), indent=2))
+    def spent(ev: Eval) -> float:
+        run = ev.agent_output
+        return run.trace.costs.total_usd if run is not None and run.trace else 0.0
 
-    bailed = [r for r in result.results if r.bailed_out]
+    print(f"{'eval':28s} {'cost':>8s}  score")
+    for ev, out in zip(evals, outputs):
+        print(f"  {out.description:26s} ${spent(ev):7.4f}  {out.score:.2f}")
+    scores = [out.score for out in outputs]
+    print(f"\nmean {sum(scores) / len(scores):.3f} over {len(scores)} evals, "
+          f"${sum(spent(ev) for ev in evals):.4f} total")
+
+    bailed = [(ev, out) for ev, out in zip(evals, outputs)
+              if ev.agent_output is not None and ev.agent_output.bailed_out]
     if bailed:
         print(f"\n{len(bailed)} run(s) hit the ceiling and answered from state instead:")
-        for one in bailed:
-            print(f"  {one.name:24s} ${one.cost_usd:.4f}  scored {one.score.value:.2f}")
+        for ev, out in bailed:
+            print(f"  {out.description:24s} ${spent(ev):.4f}  scored {out.score:.2f}")
 
     if args.json:
-        Path(args.json).write_text(json.dumps(result.model_dump(mode="json"), indent=2))
+        Path(args.json).write_text(json.dumps(
+            [out.model_dump() for out in outputs], indent=2))
         print(f"\nwrote {args.json}")
     return 0
 

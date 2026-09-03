@@ -2,11 +2,11 @@
 
     export OPENROUTER_API_KEY=...
 
-    python -m topics.kalshi.run --league MLB              # pick a live market and forecast it
-    python -m topics.kalshi.run TICKER --agent freeform
-    python -m topics.kalshi.run TICKER --agent both --trace
-    python -m topics.kalshi.run --league EPL --dry-run    # tools only, no model calls
-    python -m topics.kalshi.run TICKER --watch            # re-forecast a live game as it moves
+    python -m topics.kalshi.eval --league MLB              # pick a live market and forecast it
+    python -m topics.kalshi.eval TICKER --agent freeform
+    python -m topics.kalshi.eval TICKER --agent both --trace
+    python -m topics.kalshi.eval --league EPL --dry-run    # tools only, no model calls
+    python -m topics.kalshi.eval TICKER --watch            # re-forecast a live game as it moves
 
 ``--dry-run`` exercises the primitive set against the live exchange without
 spending anything, which is the fastest way to tell whether a failure is in the
@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
-from topics.kalshi.run.load import (  # noqa: E402
+from topics.kalshi.eval.load import (  # noqa: E402
     short_names as agent_configs, default_config, load_agent)
 from topics.kalshi.tools import TOOLS, kalshi_tools  # noqa: E402
 

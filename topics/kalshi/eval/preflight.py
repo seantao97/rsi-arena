@@ -21,8 +21,8 @@ import sys
 sys.path.insert(0, ".")
 
 from rsi_arena import AgentConfig                       # noqa: E402
-from topics.kalshi.run.load import load_agent          # noqa: E402
-from topics.kalshi.run.trading import decide, quote_from  # noqa: E402
+from topics.kalshi.eval.load import load_agent          # noqa: E402
+from topics.kalshi.eval.trading import decide, quote_from  # noqa: E402
 from topics.kalshi import gamestate as gs               # noqa: E402
 from topics.kalshi.tools import TOOLS                   # noqa: E402
 

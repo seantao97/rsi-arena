@@ -24,7 +24,7 @@ from datetime import datetime
 
 from rsi_arena.evals.scoring import Score, register_scorer
 
-from ..run.trading import quote_from
+from .trading import quote_from
 from .. import History
 from .replay import HORIZON_MINUTES, realised_mid
 

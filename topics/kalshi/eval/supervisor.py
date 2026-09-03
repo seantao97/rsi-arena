@@ -16,8 +16,8 @@ What it guarantees while running:
 * **Spend is bounded across restarts**, not per process, because a crash loop
   that resets the budget is how a ceiling silently stops being one.
 
-    python -m topics.kalshi.run.supervisor --league EPL --contracts TICKER
-    python -m topics.kalshi.run.supervisor --league EPL --discover --mode horizon
+    python -m topics.kalshi.eval.supervisor --league EPL --contracts TICKER
+    python -m topics.kalshi.eval.supervisor --league EPL --discover --mode horizon
 
 ``--discover`` is the autonomous form: it rescans the league for live markets,
 takes on new ones, releases settled ones, and keeps going. Nothing needs a
@@ -393,7 +393,7 @@ class Supervisor:
 
     async def _probability_tick(self, pos: Position, fingerprint: tuple) -> dict:
         """Ask for a probability, then check the arithmetic before recording."""
-        from ..eval.validation import validate
+        from .validation import validate
 
         agent = load_agent(self.agent_name, tools=self.tools, config=self.config)
         run = await agent.run(pos.ticker)
@@ -427,14 +427,14 @@ class Supervisor:
         from .trading import (HORIZON_MINUTES, Holding, decide,
                               quote_from, target_time)
         from .. import maker_fee, taker_fee
-        from ..eval.validation import validate_horizon
+        from .validation import validate_horizon
         from .. import Quotes
 
         # The supervisor already knows the fixture, so the game state is passed
         # in rather than rediscovered by a tool-calling loop on every tick.
         state = await TOOLS["game_state"].aget_tool_output(
             league=pos.league, game_id=pos.game_id)
-        agent = horizon_agent(self.config, self.tools)
+        agent = load_agent("horizon", tools=self.tools, config=self.config)
         run = await agent.run(pos.ticker,
                               game=json.dumps(state.raw_output)[:1200]
                               if state.ok else "unavailable")
