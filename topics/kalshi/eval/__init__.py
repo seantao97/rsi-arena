@@ -1,45 +1,44 @@
-"""Running the Kalshi harnesses and saying how they did.
+"""Scoring a Kalshi harness, by replaying it against a past it cannot see.
 
 Same convention as ``tools/``: **no underscore is public, an underscore is
-machinery**, and :data:`REGISTRY` is the definition of what an eval is. The one
-difference is that some public names here are commands rather than classes —
-``supervisor``, ``verify``, ``preflight``, ``slate`` and ``run`` are invoked with
-``python -m``, so hiding them behind an underscore would be a lie.
+machinery**, and :data:`REGISTRY` is the definition of what an eval is. ``run``
+is public without being a class because it is invoked with ``python -m``, and an
+underscore on a command would be a lie about what it is.
 
-Three evals, which are three genuinely different questions:
+Two evals, which are the two questions worth asking of a forecaster:
 
-=====================  ===========================  ======================
-eval                   asks                         needs
-=====================  ===========================  ======================
-``horizon_window``     did it beat no-change        nothing — replayed
-``horizon_skill``      the same, over live runs     a recorded feed
-``settlement_brier``   did it understand the game   a recorded feed and
-                                                    a finished match
-=====================  ===========================  ======================
+    horizon_window       did it beat no change, five minutes out
+    settlement_outcome   did it beat the market on how the match ended
 
-``horizon_window`` is the one that makes the harness measurable at all: five
-minutes after any past instant the answer is already in the candlestick
-history, so a night of football yields thousands of labelled windows without
-collecting anything. The other two grade forecasts that were actually made, and
-reach their verdict through ``Eval.score()`` rather than ``Eval.run()``.
+Both are answered by replay, from public data. Five minutes after any past
+instant the price it predicted is in the candlestick history; after the whistle
+the result is on the settled contract. So a harness is scored by putting it back
+at an instant with tools frozen there and reading what actually happened — with
+nothing collected, no state on disk, no scheduled job and no key spent waiting
+for football.
 
-Adding one is a file and one line in :data:`REGISTRY`.
+The live pipeline that used to sit beside this — a supervisor collecting
+forecasts overnight, reports over the feed it wrote, a preflight check and a
+scheduled workflow — is gone, about two thousand lines of it. It answered the
+settlement question by waiting days for forecasts to come due. Replay answers
+the same question in a second, because the match it is about has already been
+played.
+
+Adding an eval is a file and one line in :data:`REGISTRY`.
 """
 
 from __future__ import annotations
 
 from rsi_arena import Eval
 
-from .horizon_skill import HorizonSkill
 from .horizon_window import HorizonWindow
-from .settlement_brier import SettlementBrier
+from .settlement_outcome import SettlementOutcome
 
-#: Every eval this topic offers. Written by hand, so nothing is registered by
-#: accident and a command in this directory is never mistaken for one.
+#: Every eval this topic offers. Written by hand, so a command in this directory
+#: is never mistaken for one.
 REGISTRY: list[type[Eval]] = [
-    HorizonWindow,         # replayed — the answer already exists
-    HorizonSkill,          # the same metric, over live runs
-    SettlementBrier,       # after the whistle
+    HorizonWindow,        # the fast question, five minutes out
+    SettlementOutcome,    # the slow one, against how it ended
 ]
 
 EVALS: dict[str, type[Eval]] = {cls.name: cls for cls in REGISTRY}
@@ -51,5 +50,5 @@ def describe() -> str:
                      for cls in REGISTRY)
 
 
-__all__ = ["REGISTRY", "EVALS", "describe",
-           *(cls.__name__ for cls in REGISTRY)]
+__all__ = ["REGISTRY", "EVALS", "describe", "HorizonWindow",
+           "SettlementOutcome"]

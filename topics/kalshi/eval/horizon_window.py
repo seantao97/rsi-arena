@@ -11,7 +11,7 @@ from .. import History, MINUTE
 from ._load import load_agent
 from ._replay import replay_tools
 from ._scorer import score_window
-from ._trading import HORIZON_MINUTES
+from ._scorer import HORIZON_MINUTES
 
 
 class HorizonWindow(Eval):

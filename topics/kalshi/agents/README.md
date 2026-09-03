@@ -12,9 +12,14 @@ diff, version and mutate; if the same file also held the loop that drives it,
 | config | |
 |---|---|
 | `kalshi-horizon-5m.json` | where this contract's mid goes in five minutes |
-| `kalshi-sports-inplay.json` | settlement probability, during the match |
-| `kalshi-sports-pipeline.json` | settlement probability, with a research step |
-| `kalshi-sports-freeform.json` | one prompt, all tools, no plan — the control |
+
+There used to be three more — settlement-probability harnesses with the full
+tool set. They are gone because **they cannot be replayed**, and replay is the
+only way this topic scores anything now. A harness that researches the news or
+reads live game state cannot be put back at a past instant honestly: a story
+filed after that instant would be answering with the future. A replayable
+harness is one every tool of which can be frozen, which today means the book,
+the price path and the tape.
 
 ```python
 from topics.kalshi.eval.load import load_agent
@@ -82,24 +87,23 @@ made the money.
 
 ## Running it
 
-```bash
-# autonomous: sweep several leagues, adopt live markets, stop at $3
-python -m topics.kalshi.eval.supervisor \
-    --league EPL,LALIGA,MLS,USL --mode horizon --discover \
-    --max-contracts 8 --poll 150 --budget 3.00
+```python
+from datetime import datetime, timezone
+from topics.kalshi.eval import HorizonWindow
 
-# score the windows that have come due
-python -m topics.kalshi.eval.verify --mode horizon --plots
+ev = HorizonWindow("KXEPLGAME-26AUG23NEWLFC-NEW",
+                   datetime(2026, 8, 23, 15, 30, tzinfo=timezone.utc))
+out = await ev.run()
 ```
 
-`--discover` is what makes it a service. It rescans the leagues, adopts live
-markets with a two-sided quote, releases them at settlement and refills the
-slot. Slots round-robin twice — one game per league before any league gets a
-second, one contract per game before any game gets a second — because contracts
-on one match are correlated observations where matches are independent ones.
+Or over many windows:
 
-State lives in `~/.kalshi-agent/` and survives restarts, including the budget:
-a crash loop cannot spend the cap twice.
+```bash
+python -m topics.kalshi.eval.run --help
+```
+
+Needs `OPENROUTER_API_KEY`. Kalshi reads need no credentials; only the portfolio
+endpoints do.
 
 ## Scoring
 

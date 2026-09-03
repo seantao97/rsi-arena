@@ -24,7 +24,24 @@ from datetime import datetime
 
 from rsi_arena.evals.scoring import Score, register_scorer
 
-from ._trading import quote_from
+#: The horizon a forecast is made over, and scored against.
+HORIZON_MINUTES = 5
+
+
+def quote_from(mid: float, delta_cents: float,
+               half_width_cents: float) -> tuple[float, float, float]:
+    """Turn the model's change and width into a price and a two-sided quote.
+
+    Anchored on the exchange's mid, not on anything the model read off. Clamped
+    into (0, 1) because a contract cannot be worth less than nothing or more
+    than a dollar, however far the stated move goes.
+    """
+    predicted = min(0.99, max(0.01, mid + delta_cents / 100))
+    width = max(0.0, half_width_cents) / 100
+    return predicted, max(0.0, predicted - width), min(1.0, predicted + width)
+
+
+
 from .. import History
 from ._replay import HORIZON_MINUTES, realised_mid
 
@@ -144,3 +161,20 @@ def horizon_skill(ticker: str, at: datetime, mid_now: float,
 # import raises and takes the whole package down with it, which is a strange way
 # for a scorer registration to fail.
 register_scorer("horizon_skill", horizon_skill, replace=True)
+
+
+def settled_result(ticker: str) -> bool | None:
+    """How a finalised market resolved, or ``None`` if it has not.
+
+    Kalshi keeps this on every settled contract, which is what makes the slow
+    question answerable by replay: put an agent back at minute sixty of a match
+    that has since finished, and the truth it was forecasting already exists.
+    """
+    from ..tools._clients import CLIENT
+
+    try:
+        market = CLIENT.get(f"/markets/{ticker}")["market"]
+    except Exception:
+        return None
+    result = str(market.get("result") or "").lower()
+    return {"yes": True, "no": False}.get(result)

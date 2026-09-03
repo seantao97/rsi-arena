@@ -1,206 +1,125 @@
-# Running the Kalshi agent
+# Scoring a Kalshi harness
 
-Two ways, and they answer different questions.
+Two questions, both answered from public data by replay:
 
-**Locally**, when you want to watch it work — the log streams, the state
-directory is readable while it runs, and stopping it is a Ctrl-C.
+| eval | asks |
+| --- | --- |
+| `horizon_window` | did it beat no change, five minutes out |
+| `settlement_outcome` | did it beat the market on how the match ended |
 
-**Scheduled**, when you want data from an evening you are not at a desk for.
-That needs somewhere to keep an API key, which is why it does not live in this
-repository: this one is public.
+Five minutes after any past instant the price it predicted is already in
+Kalshi's candlestick history; after the whistle the result is on the settled
+contract. So a harness is scored by putting it back at that instant with tools
+frozen there and reading what actually happened — no data collected, no state on
+disk, no scheduled job, no key spent waiting for football.
+
+## What can be replayed
+
+A harness can be replayed only if **every** tool it uses can be frozen. The book,
+the price path and the tape can: they are history, and history stops where you
+tell it to. Live game state and web research cannot — a story filed after the
+instant would be answering with the future.
+
+Binding fails loudly on a tool the frozen box does not have, which is the check
+that keeps a replay honest. It is also the constraint that shapes what a
+rewritten harness may reach for.
+
+```python
+from datetime import datetime, timezone
+from topics.kalshi.eval import HorizonWindow
+
+ev = HorizonWindow("KXEPLGAME-26AUG23NEWLFC-NEW",
+                   datetime(2026, 8, 23, 15, 30, tzinfo=timezone.utc))
+out = await ev.run()
+out.score      # 0.5 + skill/2
+out.comments   # predicted 0.245, market printed 0.245; no-change missed by ...
+```
+
+Or over many windows at once:
+
+```bash
+python -m topics.kalshi.eval.run --help
+```
 
 ## What is in here
 
 Same convention as `tools/`: **no underscore is public, an underscore is
-machinery**, and `REGISTRY` is the definition of what an eval is. The one
-difference is that some public names here are commands rather than classes —
-`supervisor`, `verify`, `preflight`, `slate` and `run` are invoked with
-`python -m`, so hiding them behind an underscore would be a lie.
-
-### The evals
-
-| eval | asks | needs |
-| --- | --- | --- |
-| `horizon_window` | did it beat no-change | nothing — replayed |
-| `horizon_skill` | the same, over live runs | a recorded feed |
-| `settlement_brier` | did it understand the game | a feed, and a finished match |
-
-`horizon_window` is the one that makes the harness measurable at all: five
-minutes after any past instant the answer is already in the candlestick history,
-so a night of football yields thousands of labelled windows without collecting
-anything. The other two grade forecasts that were actually made, and reach their
-verdict through `Eval.score()` rather than `Eval.run()`.
-
-```python
-from topics.kalshi.eval import EVALS, describe
-print(describe())
-```
-
-There is no `forecast_consistency`. Checking that a forecast does not contradict
-itself is a **guard, not a measure** — scoring 1.0 for "did not argue with
-itself" is not a quality signal a leaderboard should rank on. Those checks live
-in `_validation.py`, where the supervisor applies them before a forecast is
-recorded, which is the right place for a guard.
-
-### The machinery
+machinery**, and `REGISTRY` is the definition of what an eval is. `run` is
+public without being a class because it is invoked with `python -m`.
 
 | | |
 | --- | --- |
+| `horizon_window.py` | the fast question |
+| `settlement_outcome.py` | the slow one |
+| `run.py` | the benchmark — one harness over many windows |
 | `_load.py` | JSON config to `Agent`, and the short labels the CLI takes |
 | `_replay.py` | tools frozen at a past instant, so a replay cannot see ahead |
-| `_scorer.py` | the window arithmetic every horizon eval shares |
-| `_trading.py` | `decide()` — a forecast and a book into an action |
-| `_validation.py` | refuses a forecast that disagrees with itself |
+| `_scorer.py` | the window arithmetic, and the quote a prediction implies |
 
-### The commands
+## The benchmark is no change
 
-| | |
-| --- | --- |
-| `supervisor.py` | the live collection loop — discovery, polling, budget, state |
-| `verify.py`, `verify_horizon.py` | the reports and plots over a recorded feed |
-| `run.py` | the replay benchmark over a fixed set of past windows |
-| `slate.py` | what is actually tradeable today |
-| `preflight.py` | proves both feeds work before collecting for hours |
+Predicting the price stays put is free and nearly always nearly right, so
+absolute error rewards it. The score is *skill against no change*: the fraction
+of the benchmark's error the forecast removed. Zero means the forecast was worth
+exactly as much as saying nothing, and that is where a harness that copies the
+current mid lands — which, measured over 586 live windows, is where the first
+one did.
 
-Only the evals and the machinery are needed to score a harness. Everything under
-*commands* exists to collect live forecasts and report on them, which is
-upstream of evaluation rather than part of it.
+Reported as `0.5 + skill/2` so it sits in [0, 1] with half a point for matching
+the benchmark. The raw number is in `metadata["skill"]`, unsquashed.
 
-## Before starting: is there anything to trade?
+**A market that did not move scores 0.5 however right or wrong the forecast
+was.** No change has zero error there, so skill is undefined. Those windows carry
+`metadata["unmeasurable"]` so a caller pooling results can drop them rather than
+average them in as ties — on a real fixture, three windows in four were
+unmeasurable.
 
-```bash
-python -m topics.kalshi.eval.slate --league EPL,LALIGA,SERIEA,MLS
-```
+## The model predicts, the code decides
 
-```
-league       fixtures  live  tradeable   kick-offs
-LALIGA              1     1          1   19:00
-EPL                 1     1          0   19:00
-MLS                 2     0          0   20:30, 23:00
+The agent returns a *change* and a quote width, never a price level. Two failure
+modes measured over 144 live forecasts both came from asking for a level:
 
-5 fixtures on the feed, 3 of them under way, 1 with a market to trade.
-Worth collecting now.
-```
+- **63% of forecasts returned the current mid exactly.** Copying the visible
+  number is the path of least resistance when a level is what is wanted, and it
+  scores zero by construction. Asked for a change, doing nothing costs the model
+  a deliberate `0`.
+- **Both trades that run produced came from misreading the book.** One explained
+  a price "already fading back to 0.105" while the market was at 0.295. Because
+  the anchor was the model's own reading, a misreading manufactured an edge out
+  of nothing — and the further off it was, the larger the fake edge, so the fee
+  threshold selected for exactly those. A change is applied by code to the true
+  mid, so the anchor can no longer be wrong.
 
-Read `tradeable`, not `fixtures`. They differ constantly: the exchange lists
-what it chooses to, and the fixture feed answers with the *next round* when a
-league has nothing on today — so seven fixtures across five leagues can mean
-one match tonight and four in three days.
+`_scorer.quote_from` is where that anchoring happens.
 
-An afternoon has been lost to reading that column wrong. It is the whole reason
-this command exists.
+## Costs are the size of the signal
 
-## Locally
+The taker fee is `ceil(0.07 · P · (1−P) · 100)/100`, peaking at `P = 0.50`. A
+round trip is two to three cents — **the same size as the predictions**. A
+harness that looks profitable before fees usually is not after them, and the
+first one was not: over 211 decisions the best edge after fees was 0.0000.
 
-```bash
-export OPENROUTER_API_KEY=...
+## What used to be here
 
-python -m topics.kalshi.eval.supervisor \
-    --league EPL,LALIGA,SERIEA,MLS,ARGENTINA,BRASIL \
-    --mode horizon --discover \
-    --max-contracts 12 --max-per-game 3 \
-    --poll 150 --budget 20.00 \
-    --state-dir ~/.kalshi-tonight
-```
+A supervisor collecting forecasts overnight, reports and plots over the feed it
+wrote, a preflight check and a scheduled GitHub workflow — about two thousand
+lines, and three settlement-probability harnesses to feed it.
 
-| flag | |
-|---|---|
-| `--discover` | rescan the leagues, adopt live markets, release them at settlement, refill the slot. Without it you must name tickers |
-| `--max-per-game` | slots one fixture may hold. Three is deliberate: sixteen contracts on one match are sixteen correlated observations, and one busy match will otherwise take every slot a later kick-off needs |
-| `--poll` | seconds between forecasts on each contract |
-| `--budget` | total model spend, enforced across restarts, so a crash loop cannot spend it twice |
+Removed. The settlement question it existed to answer is answered here by
+replay, in a second, because the match it is about has already been played. The
+harnesses went with it: they researched the news and read live game state, so
+they could not be replayed honestly at all. Three things learned by
+running it, worth writing down before they are lost with the code:
 
-Discovery costs nothing while it waits, so starting an hour before kick-off is
-free.
+- **Scheduled runs fired hours late**, consistently rather than randomly —
+  19:09Z from an 18:35Z cron, two days running. Uncorrected that pushed every
+  run past the European fixtures into a window where almost nothing is listed.
+- **A private repository's Actions allowance is spent in four or five nights**
+  by a 285-minute run. Five consecutive scheduled runs once failed in three
+  seconds each at the end of a month and recovered by themselves on the first.
+  Fifty-seven fixtures went uncollected before anyone noticed.
+- **A failing scheduled job tells nobody.** That is what turned a fixable
+  problem into a lost weekend.
 
-### Scoring it
-
-```bash
-python -m topics.kalshi.eval.verify --mode horizon \
-    --feed ~/.kalshi-tonight/forecasts.jsonl --plots
-
-# several evenings pooled, with what each contributed
-python -m topics.kalshi.eval.verify --mode horizon \
-    --feed "~/.kalshi-mon/forecasts.jsonl,~/.kalshi-tue/forecasts.jsonl"
-```
-
-One evening is not enough to tell a real number from a lucky one — every run so
-far has swung tens of percent before settling.
-
-## Scheduled
-
-`workflow.yml` is a GitHub Actions workflow. It wants `OPENROUTER_API_KEY` as
-a repository secret, and it checks this repository out at `main` and runs the
-agent from it, so the scheduled job never drifts from what is on the branch and
-holds no code of its own. As written it lives in a separate repository; see
-below for why, and for when it should not.
-
-A separate repository is not the only option, and the reason is narrower than
-it looks. What cannot go near a public repository is a key *in the tree* — a
-literal in a file, a default in a workflow. A repository **secret** is a
-different thing: encrypted, redacted from logs, and withheld from fork pull
-requests, so it is as safe in a public repository as a private one.
-
-So the fork in the road is about who owns the repository, not about secrecy:
-
-- **Here, in the arena repository.** Standard runners are free for public
-  repositories with no minute allowance to run out, which removes the failure
-  described below entirely. Needs Sean to set `OPENROUTER_API_KEY` on his own
-  repository — only an admin can — and the run logs become world-readable.
-- **A separate private repository**, as set up here: anyone can stand it up
-  without waiting on an admin, and the logs stay private. Pays for it in
-  Actions minutes.
-
-The workflow checks this repository out either way. Running it from inside the
-arena would drop that checkout step, since it would already be there.
-
-### Three things learned by running it
-
-**Scheduled runs fire late — hours late.** Observed at 19:09Z and 19:10Z on
-consecutive days from an 18:35Z cron: a consistent offset rather than jitter.
-Uncorrected it pushes every run past the European fixtures into a window where
-almost nothing is listed. Set each cron ahead by the delay you measure, and
-write down why, or the next person reads `07:55` as a typo.
-
-**Private repositories have an Actions minute allowance**, and a 285-minute run
-uses it up in four or five nights. Five consecutive scheduled runs failed in
-three seconds each with no step executed, at the end of a month, and recovered
-by themselves on the first — which is what that failure looks like. Fifty-seven
-fixtures went uncollected before anyone noticed.
-
-**A failing scheduled job tells nobody.** That is what turned a fixable problem
-into a lost weekend. Whatever you run this on, arrange for a failure to reach a
-person.
-
-### Collecting nothing is sometimes correct
-
-`preflight.py` checks both feeds — the exchange *and* the fixture feed — because
-losing either produces the same silence: an empty forecasts file that looks
-exactly like a night with no football. It counts live fixtures that have a
-market and passes that count on, so the guard afterwards can tell the two apart:
-
-- nothing live and nothing collected — a quiet night, exit clean
-- markets available and nothing collected — discovery is broken, fail loudly
-
-Without that distinction the guard fired on two consecutive quiet weeknights,
-which is how a red build stops meaning anything.
-
-Run it by hand before a long session:
-
-```bash
-python topics/kalshi/eval/preflight.py "EPL,LALIGA,SERIEA"
-```
-
-## What lands where
-
-```
-<state-dir>/forecasts.jsonl   one line per forecast: book, prediction,
-                              decision, reasoning, and what was booked
-<state-dir>/state.json        positions, budget spent, survives restarts
-<state-dir>/plots/            written by verify --plots
-```
-
-`forecasts.jsonl` is the record. Every number in any report is recomputed from
-it rather than taken from a run's own summary — a report printed inside a
-scheduled container is only as good as the code that container checked out, and
-one of them reported a return of -280%, which is not a possible number.
+Both questions are recoverable from a recorded feed if they are ever wanted. The
+replay path needs none of it.

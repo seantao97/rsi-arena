@@ -65,7 +65,7 @@ def test_a_documented_script_path_exists(source: str, script: str) -> None:
 
 def test_there_are_invocations_to_check() -> None:
     """A regex that silently matches nothing would pass every test below."""
-    assert len(documented_modules()) >= 4
+    assert documented_modules(), "no `python -m` commands found to check"
 
 
 @pytest.mark.parametrize("source,module", documented_modules(),
