@@ -24,9 +24,9 @@ from datetime import datetime
 
 from rsi_arena.evals.scoring import Score, register_scorer
 
-from .trading import quote_from
+from ._trading import quote_from
 from .. import History
-from .replay import HORIZON_MINUTES, realised_mid
+from ._replay import HORIZON_MINUTES, realised_mid
 
 # Below this the two errors are the same number to the tenth of a cent, and a
 # ratio between them is noise dressed as a result.

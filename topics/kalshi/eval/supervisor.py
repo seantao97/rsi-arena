@@ -40,7 +40,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .. import fixture_key
-from .load import short_names as agent_configs, default_config, load_agent
+from ._load import short_names as agent_configs, default_config, load_agent
 from ..tools import TOOLS, kalshi_tools
 
 
@@ -337,7 +337,7 @@ class Supervisor:
             if pos.holding:
                 # Never closed, so it pays what the contract pays — a dollar or
                 # nothing. This is the cost of not deciding to get out.
-                from .trading import Holding as _H
+                from ._trading import Holding as _H
                 held = _H.from_dict(pos.holding)
                 payout = 1.0 if ((result == "yes") == (held.side == "YES")) else 0.0
                 settled_pnl = round(held.contracts * (payout - held.price)
@@ -393,7 +393,7 @@ class Supervisor:
 
     async def _probability_tick(self, pos: Position, fingerprint: tuple) -> dict:
         """Ask for a probability, then check the arithmetic before recording."""
-        from .validation import validate
+        from ._validation import validate
 
         agent = load_agent(self.agent_name, tools=self.tools, config=self.config)
         run = await agent.run(pos.ticker)
@@ -423,11 +423,11 @@ class Supervisor:
 
     async def _horizon_tick(self, pos: Position, fingerprint: tuple) -> dict:
         """Predict the price five minutes out; let arithmetic decide the trade."""
-        from .load import load_agent
-        from .trading import (HORIZON_MINUTES, Holding, decide,
+        from ._load import load_agent
+        from ._trading import (HORIZON_MINUTES, Holding, decide,
                               quote_from, target_time)
         from .. import maker_fee, taker_fee
-        from .validation import validate_horizon
+        from ._validation import validate_horizon
         from .. import Quotes
 
         # The supervisor already knows the fixture, so the game state is passed
@@ -458,7 +458,7 @@ class Supervisor:
                 placed_at = datetime.fromisoformat(order["placed_at"])
             except (KeyError, ValueError):
                 placed_at = datetime.now(timezone.utc)
-            from .trading import HORIZON_MINUTES
+            from ._trading import HORIZON_MINUTES
             expired = (datetime.now(timezone.utc) - placed_at
                        >= timedelta(minutes=HORIZON_MINUTES))
             if not filled and not expired:
@@ -575,7 +575,7 @@ class Supervisor:
             placed = datetime.fromisoformat(order["placed_at"])
         except (KeyError, ValueError):
             return False
-        from .trading import HORIZON_MINUTES
+        from ._trading import HORIZON_MINUTES
         expired = min(placed + timedelta(minutes=HORIZON_MINUTES),
                       datetime.now(timezone.utc))
         if expired <= placed:

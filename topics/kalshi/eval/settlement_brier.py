@@ -7,8 +7,8 @@ from typing import Any
 
 from rsi_arena import Eval, EvalOutput
 
-from ... import History
-from ..load import load_agent
+from .. import History
+from ._load import load_agent
 
 FEED = "~/.kalshi-agent/forecasts.jsonl"
 
@@ -39,7 +39,7 @@ class SettlementBrier(Eval):
 
     def report(self):
         """The settled forecasts, joined to their outcomes."""
-        from ..verify import load
+        from .verify import load
 
         return load(self.feed, self.history)
 

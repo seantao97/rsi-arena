@@ -1,4 +1,4 @@
-"""``topics.kalshi.eval.evals`` — the Kalshi evals, as Eval instances.
+"""``topics.kalshi.eval`` — the Kalshi evals, as Eval subclasses.
 
 Two questions, due at different times: is the forecast self-consistent (now),
 and was it right (five minutes later). These check that each is asked of the
@@ -13,8 +13,8 @@ import pytest
 
 from rsi_arena import Eval, EvalOutput
 
-from .evals import (REGISTRY, ForecastConsistency, HorizonSkill,
-                    HorizonWindow, SettlementBrier, describe)
+from . import (REGISTRY, HorizonSkill, HorizonWindow, SettlementBrier,
+               describe)
 
 TICKER = "KXEPLGAME-26AUG23NEWLFC-NEW"
 AT = datetime(2026, 8, 23, 15, 30, tzinfo=timezone.utc)
@@ -45,47 +45,6 @@ def test_a_replayed_window_binds_the_frozen_tools() -> None:
     which is what makes replaying a harness possible at all."""
     ev = HorizonWindow(TICKER, AT)
     assert set(ev.agent.tools) == {"market_quote", "candlesticks", "previous_trades"}
-
-
-# --- the immediate question: does it contradict itself? -----------------------
-
-
-def test_a_self_consistent_forecast_scores_one() -> None:
-    ev = ForecastConsistency(ticker=TICKER)
-    out = ev.eval_function(FakeRun({"delta_cents": 0.0, "half_width_cents": 2.0}))
-    assert out.score == 1.0
-    assert out.metadata["mode"] == "horizon"
-
-
-def test_a_forecast_that_argues_with_itself_scores_zero() -> None:
-    """A half width of zero claims a price known to the cent five minutes out.
-    A wide one is only a warning — nothing clears, but nothing is claimed."""
-    strict = ForecastConsistency(ticker=TICKER).eval_function(
-        FakeRun({"delta_cents": 5.0, "half_width_cents": 0.0}))
-    assert strict.score == 0.0 and strict.metadata["errors"]
-
-    wide = ForecastConsistency(ticker=TICKER).eval_function(
-        FakeRun({"delta_cents": 5.0, "half_width_cents": 900.0}))
-    assert wide.score == 1.0, "unclearable, but it does not contradict itself"
-    assert wide.metadata["warnings"]
-
-
-def test_the_corrected_forecast_is_kept_not_just_the_verdict() -> None:
-    """Recomputing what can be recomputed is the point; a flag alone would throw
-    away the only version of the forecast that holds together."""
-    out = ForecastConsistency(ticker=TICKER).eval_function(
-        FakeRun({"delta_cents": 1.0, "half_width_cents": 3.0}))
-    assert "corrected" in out.metadata
-
-
-def test_junk_output_is_scored_rather_than_crashing() -> None:
-    """A model that returns a string where a dict was asked for is a bad
-    forecast, not a broken eval. Nor is an empty one consistent — saying nothing
-    would otherwise score the same as getting it right."""
-    for junk in ("not a dict", {}, {"commentary": "looks fine to me"}):
-        out = ForecastConsistency(ticker=TICKER).eval_function(FakeRun(junk))
-        assert out.score == 0.0, junk
-        assert "no forecast" in out.comments
 
 
 # --- the deferred question: was it right? ------------------------------------
@@ -185,7 +144,7 @@ def test_a_deferred_eval_names_the_benchmark_it_scores_against() -> None:
 def test_an_eval_supplies_every_input_its_agent_reads() -> None:
     """Eval.run() refuses a plan whose inputs are not covered, so this is the
     check that the Kalshi evals hold up their end of that bargain."""
-    for ev in (HorizonWindow(TICKER, AT), ForecastConsistency(ticker=TICKER)):
+    for ev in (HorizonWindow(TICKER, AT),):
         assert not ev.agent.plan.required_inputs() - set(ev.input), ev.name
 
 

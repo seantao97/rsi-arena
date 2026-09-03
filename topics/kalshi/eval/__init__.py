@@ -1,15 +1,55 @@
-"""A repeatable benchmark for in-play forecasting harnesses.
+"""Running the Kalshi harnesses and saying how they did.
 
-Live collection answers "how is it doing tonight". This answers "is version two
-better than version one", which needs the same questions asked twice — and a
-live market never asks the same question twice.
+Same convention as ``tools/``: **no underscore is public, an underscore is
+machinery**, and :data:`REGISTRY` is the definition of what an eval is. The one
+difference is that some public names here are commands rather than classes —
+``supervisor``, ``verify``, ``preflight``, ``slate`` and ``run`` are invoked with
+``python -m``, so hiding them behind an underscore would be a lie.
 
-:mod:`.replay` puts an agent back at a chosen instant of a finished match.
-:mod:`.scorer` turns what it says there into a score the arena can rank on.
+Three evals, which are three genuinely different questions:
+
+=====================  ===========================  ======================
+eval                   asks                         needs
+=====================  ===========================  ======================
+``horizon_window``     did it beat no-change        nothing — replayed
+``horizon_skill``      the same, over live runs     a recorded feed
+``settlement_brier``   did it understand the game   a recorded feed and
+                                                    a finished match
+=====================  ===========================  ======================
+
+``horizon_window`` is the one that makes the harness measurable at all: five
+minutes after any past instant the answer is already in the candlestick
+history, so a night of football yields thousands of labelled windows without
+collecting anything. The other two grade forecasts that were actually made, and
+reach their verdict through ``Eval.score()`` rather than ``Eval.run()``.
+
+Adding one is a file and one line in :data:`REGISTRY`.
 """
 
-from .replay import HORIZON_MINUTES, Timeline, replay_tools, timeline
-from .scorer import WindowScore, horizon_skill, score_window
+from __future__ import annotations
 
-__all__ = ["HORIZON_MINUTES", "Timeline", "WindowScore", "horizon_skill",
-           "replay_tools", "score_window", "timeline"]
+from rsi_arena import Eval
+
+from .horizon_skill import HorizonSkill
+from .horizon_window import HorizonWindow
+from .settlement_brier import SettlementBrier
+
+#: Every eval this topic offers. Written by hand, so nothing is registered by
+#: accident and a command in this directory is never mistaken for one.
+REGISTRY: list[type[Eval]] = [
+    HorizonWindow,         # replayed — the answer already exists
+    HorizonSkill,          # the same metric, over live runs
+    SettlementBrier,       # after the whistle
+]
+
+EVALS: dict[str, type[Eval]] = {cls.name: cls for cls in REGISTRY}
+
+
+def describe() -> str:
+    """A catalogue, for a prompt or a reader deciding which to run."""
+    return "\n".join(f"- {cls.name}: {cls.description.splitlines()[0]}"
+                     for cls in REGISTRY)
+
+
+__all__ = ["REGISTRY", "EVALS", "describe",
+           *(cls.__name__ for cls in REGISTRY)]

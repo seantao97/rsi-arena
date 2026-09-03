@@ -9,34 +9,62 @@ directory is readable while it runs, and stopping it is a Ctrl-C.
 That needs somewhere to keep an API key, which is why it does not live in this
 repository: this one is public.
 
-## The evals
+## What is in here
 
-Four, one class to a file in `evals/`, declared the way the tools are — a
-`REGISTRY`, a `describe()`, and a description written for whoever has to choose
-between them. Every one subclasses the core `rsi_arena.Eval`, so no Kalshi type
-escapes into the framework.
+Same convention as `tools/`: **no underscore is public, an underscore is
+machinery**, and `REGISTRY` is the definition of what an eval is. The one
+difference is that some public names here are commands rather than classes —
+`supervisor`, `verify`, `preflight`, `slate` and `run` are invoked with
+`python -m`, so hiding them behind an underscore would be a lie.
 
-| eval | asks | answerable |
+### The evals
+
+| eval | asks | needs |
 | --- | --- | --- |
-| `forecast_consistency` | does the forecast contradict itself | immediately |
-| `horizon_window` | did it beat no-change | replayed — the answer already exists |
-| `horizon_skill` | the same, over live runs, pooled | five minutes later |
-| `settlement_brier` | did it understand the game | after the whistle |
+| `horizon_window` | did it beat no-change | nothing — replayed |
+| `horizon_skill` | the same, over live runs | a recorded feed |
+| `settlement_brier` | did it understand the game | a feed, and a finished match |
+
+`horizon_window` is the one that makes the harness measurable at all: five
+minutes after any past instant the answer is already in the candlestick history,
+so a night of football yields thousands of labelled windows without collecting
+anything. The other two grade forecasts that were actually made, and reach their
+verdict through `Eval.score()` rather than `Eval.run()`.
 
 ```python
-from topics.kalshi.eval.evals import EVALS, describe
-
+from topics.kalshi.eval import EVALS, describe
 print(describe())
-out = await EVALS["horizon_skill"](feed="~/.kalshi-agent/forecasts.jsonl").score(None)
 ```
 
-The two that grade a recorded feed go through `Eval.score()` rather than
-`Eval.run()`. Their forecasts were made hours ago by a run that is gone, and
-running an agent to re-derive them would be both wrong and expensive.
+There is no `forecast_consistency`. Checking that a forecast does not contradict
+itself is a **guard, not a measure** — scoring 1.0 for "did not argue with
+itself" is not a quality signal a leaderboard should rank on. Those checks live
+in `_validation.py`, where the supervisor applies them before a forecast is
+recorded, which is the right place for a guard.
 
-`verify.py` reads the same objects: the eval gives the score the arena ranks on,
-the CLI renders the report a person reads, and they cannot drift because there
-is one of them.
+### The machinery
+
+| | |
+| --- | --- |
+| `_load.py` | JSON config to `Agent`, and the short labels the CLI takes |
+| `_replay.py` | tools frozen at a past instant, so a replay cannot see ahead |
+| `_scorer.py` | the window arithmetic every horizon eval shares |
+| `_trading.py` | `decide()` — a forecast and a book into an action |
+| `_validation.py` | refuses a forecast that disagrees with itself |
+
+### The commands
+
+| | |
+| --- | --- |
+| `supervisor.py` | the live collection loop — discovery, polling, budget, state |
+| `verify.py`, `verify_horizon.py` | the reports and plots over a recorded feed |
+| `run.py` | the replay benchmark over a fixed set of past windows |
+| `slate.py` | what is actually tradeable today |
+| `preflight.py` | proves both feeds work before collecting for hours |
+
+Only the evals and the machinery are needed to score a harness. Everything under
+*commands* exists to collect live forecasts and report on them, which is
+upstream of evaluation rather than part of it.
 
 ## Before starting: is there anything to trade?
 

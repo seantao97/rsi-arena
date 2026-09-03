@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
-from topics.kalshi.eval.load import (  # noqa: E402
+from topics.kalshi.eval._load import (  # noqa: E402
     short_names as agent_configs, default_config, load_agent)
 from topics.kalshi.tools import TOOLS, kalshi_tools  # noqa: E402
 

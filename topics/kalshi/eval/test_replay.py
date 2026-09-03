@@ -10,8 +10,8 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from .. import MINUTE, History
-from .replay import SCORING_KINDS, replay_tools, timeline
-from .scorer import WindowScore, score_window
+from ._replay import SCORING_KINDS, replay_tools, timeline
+from ._scorer import WindowScore, score_window
 
 GAME = "401879319"          # Newcastle 2-2 Liverpool, 23 Aug 2026
 TICKER = "KXEPLGAME-26AUG23NEWLFC-NEW"

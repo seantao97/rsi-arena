@@ -7,8 +7,8 @@ from typing import Any, Iterable
 
 from rsi_arena import Eval, EvalOutput
 
-from ... import History
-from ..load import load_agent
+from .. import History
+from ._load import load_agent
 
 FEED = "~/.kalshi-agent/forecasts.jsonl"
 
@@ -40,7 +40,7 @@ class HorizonSkill(Eval):
                          input=inputs)
 
     def report(self):
-        from ..verify_horizon import load, load_many
+        from .verify_horizon import load, load_many
 
         return (load(self.feeds[0], self.history) if len(self.feeds) == 1
                 else load_many(self.feeds, self.history))

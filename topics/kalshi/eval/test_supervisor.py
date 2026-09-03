@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from .. import fixture_key
-from .trading import Holding
+from ._trading import Holding
 from .supervisor import Supervisor
 
 

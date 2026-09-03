@@ -430,7 +430,7 @@ def main() -> int:
 
     if args.mode == "horizon":
         from . import verify_horizon
-        from .evals import HorizonSkill
+        from . import HorizonSkill
 
         feeds = [x.strip() for x in args.feed.split(",") if x.strip()]
         # One evening is not enough to tell a real number from a lucky one, so
@@ -474,7 +474,7 @@ def main() -> int:
                 print(f"  wrote {path}")
         return 0
 
-    from .evals import SettlementBrier
+    from . import SettlementBrier
 
     ev = SettlementBrier(feed=args.feed)
     report = ev.report()

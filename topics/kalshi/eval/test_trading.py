@@ -1,4 +1,4 @@
-"""``topics.kalshi.eval.trading`` — the parts that broke in production.
+"""``topics.kalshi.eval._trading`` — the parts that broke in production.
 
 Each of these exists because it went wrong live, in a way that reading the diff
 did not catch.
@@ -6,8 +6,8 @@ did not catch.
 
 from __future__ import annotations
 
-from .load import available, load_agent
-from .trading import Holding, decide, quote_from
+from ._load import available, load_agent
+from ._trading import Holding, decide, quote_from
 
 
 # --- the agent ----------------------------------------------------------------
