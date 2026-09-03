@@ -28,9 +28,9 @@ from pathlib import Path
 from rsi_arena import Agent, AgentConfig
 
 from .. import MINUTE, History
-from .evals import HorizonWindow
-from .replay import HORIZON_MINUTES, Timeline, replay_tools, timeline
-from .scorer import WindowScore, score_window
+from . import HorizonWindow
+from ._replay import HORIZON_MINUTES, Timeline, replay_tools, timeline
+from ._scorer import WindowScore, score_window
 
 
 @dataclass
@@ -146,7 +146,7 @@ async def run_harness(spec: dict, line: Timeline, tickers: list[str],
 
 def default_spec() -> dict:
     """The harness this benchmark exists to be beaten."""
-    from .load import load_agent
+    from ._load import load_agent
     return load_agent("horizon", config=AgentConfig(default_model="anthropic/claude-sonnet-4.5",
                                      max_usd=0.10)).to_dict()
 
