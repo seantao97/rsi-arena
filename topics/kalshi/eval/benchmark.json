@@ -1,0 +1,47 @@
+[
+  {
+    "league": "EPL",
+    "game": "401879292",
+    "event": "KXEPLGAME-26SEP06ARSCFC",
+    "tickers": [
+      "KXEPLGAME-26SEP06ARSCFC-ARS",
+      "KXEPLGAME-26SEP06ARSCFC-CFC"
+    ]
+  },
+  {
+    "league": "EPL",
+    "game": "401879291",
+    "event": "KXEPLGAME-26SEP06EVEMUN",
+    "tickers": [
+      "KXEPLGAME-26SEP06EVEMUN-EVE",
+      "KXEPLGAME-26SEP06EVEMUN-MUN"
+    ]
+  },
+  {
+    "league": "EPL",
+    "game": "401878780",
+    "event": "KXEPLGAME-26SEP05NFOTOT",
+    "tickers": [
+      "KXEPLGAME-26SEP05NFOTOT-NFO",
+      "KXEPLGAME-26SEP05NFOTOT-TOT"
+    ]
+  },
+  {
+    "league": "EPL",
+    "game": "401879289",
+    "event": "KXEPLGAME-26SEP05FULCRY",
+    "tickers": [
+      "KXEPLGAME-26SEP05FULCRY-FUL",
+      "KXEPLGAME-26SEP05FULCRY-CRY"
+    ]
+  },
+  {
+    "league": "EPL",
+    "game": "401879319",
+    "event": "KXEPLGAME-26AUG23NEWLFC",
+    "tickers": [
+      "KXEPLGAME-26AUG23NEWLFC-NEW",
+      "KXEPLGAME-26AUG23NEWLFC-LFC"
+    ]
+  }
+]
