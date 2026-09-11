@@ -177,3 +177,37 @@ def test_a_replay_refuses_a_harness_whose_tools_cannot_be_frozen() -> None:
                                 "tools": ["web_research"],
                                 "plan": {"steps": []}})
     assert "web_research" in str(exc.value)
+
+
+# --- the fixed benchmark ------------------------------------------------------
+
+
+def test_the_benchmark_names_fixtures_that_still_resolve() -> None:
+    """The set is fixed so two harnesses are comparable. A fixture that stops
+    resolving silently shrinks the question set, which is the same as changing
+    the exam between candidates."""
+    import json
+    from pathlib import Path
+
+    from .run import BENCHMARK
+
+    fixtures = json.loads(Path(BENCHMARK).read_text())
+    assert len(fixtures) >= 3, "too few to pool"
+    for f in fixtures:
+        assert f["league"] and f["game"] and f["event"]
+        assert f["tickers"], f["event"]
+        for ticker in f["tickers"]:
+            assert ticker.startswith(f["event"]), (ticker, f["event"])
+
+
+def test_benchmark_fixtures_are_distinct_matches() -> None:
+    """Two contracts on one match are correlated observations; two matches are
+    independent ones. Pooling the first as though it were the second overstates
+    how much evidence a number rests on."""
+    import json
+    from pathlib import Path
+
+    from .run import BENCHMARK
+
+    fixtures = json.loads(Path(BENCHMARK).read_text())
+    assert len({f["game"] for f in fixtures}) == len(fixtures)

@@ -28,6 +28,17 @@ def call(name: str, **kwargs):
     """A declared tool answers synchronously through get_tool_output."""
     return TOOLS[name].get_tool_output(kwargs)
 
+#: The fixture recedes. A window measured in hours from *now* reaches it today
+#: and does not next month, which is a test that rots rather than a tool that
+#: broke — `candlesticks` only looks back from the present, so any test of it
+#: has to ask for a window wide enough to still contain 23 August.
+def hours_since_fixture(pad: float = 48.0) -> float:
+    from datetime import datetime, timezone
+
+    kickoff = datetime(2026, 8, 23, 15, 30, tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - kickoff).total_seconds() / 3600 + pad
+
+
 SETTLED_EVENT = "KXEPLGAME-26AUG23NEWLFC"
 SETTLED_TICKER = "KXEPLGAME-26AUG23NEWLFC-NEW"
 FINISHED_GAME = ("EPL", "401879319")
@@ -158,7 +169,8 @@ def test_devig_sums_to_one_and_needs_every_outcome() -> None:
 
 
 def test_candlesticks_read_a_finished_market() -> None:
-    out = call("candlesticks", ticker=SETTLED_TICKER, hours_back=300, hourly=True)
+    out = call("candlesticks", ticker=SETTLED_TICKER,
+               hours_back=hours_since_fixture(), hourly=True)
     assert out.ok, out.response
     bars = out.raw_output["bars"]
     assert len(bars) > 10
@@ -171,7 +183,7 @@ def test_candlesticks_read_a_finished_market() -> None:
 def test_probabilities_are_devigged_not_raw() -> None:
     """A contract's mid is not a probability — the outcomes overround."""
     out = call("candlestick_probabilities", event_ticker=SETTLED_EVENT,
-               hours_back=300, hourly=True)
+               hours_back=hours_since_fixture(), hourly=True)
     if not out.ok:
         pytest.skip("settled event no longer quotes both sides")
     assert sum(out.raw_output["now"].values()) == pytest.approx(1.0, abs=1e-3)

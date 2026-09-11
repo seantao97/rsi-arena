@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 import statistics
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -151,10 +152,63 @@ def default_spec() -> dict:
                                      max_usd=0.10)).to_dict()
 
 
+BENCHMARK = Path(__file__).resolve().parent / "benchmark.json"
+
+
+async def run_suite(spec: dict, every: int, horizon: int,
+                    as_json: bool = False) -> int:
+    """Run one harness over the fixed set and report the pooled number.
+
+    The set is fixed on purpose. A live evening gives one harness one set of
+    fixtures and never repeats them, so two harnesses tested on different nights
+    cannot be told apart from two harnesses of different quality. Here the
+    questions do not move, and the only thing that changes is the answer.
+    """
+    fixtures = json.loads(BENCHMARK.read_text())
+    results = []
+    for fixture in fixtures:
+        line = timeline(fixture["league"], fixture["game"])
+        if line is None:
+            print(f"  skipped {fixture['event']}: no timeline", file=sys.stderr)
+            continue
+        results.append((fixture, await run_harness(
+            spec, line, fixture["tickers"], every, horizon)))
+
+    if not results:
+        print(json.dumps({"error": "no fixture in the benchmark could be run"}))
+        return 1
+
+    windows = [w for _, r in results for w in r.windows]
+    unmeasurable = sum(1 for w in windows if w.naive_error < 1e-9)
+    pooled = {
+        "harness": results[0][1].harness,
+        "fixtures": len(results),
+        "windows": len(windows),
+        "unmeasurable": unmeasurable,
+        "skill": round(sum(w.skill for w in windows) / len(windows), 4) if windows else 0.0,
+        "echoed": sum(1 for w in windows if w.echoed),
+        "cost_usd": round(sum(r.cost_usd for _, r in results), 4),
+    }
+    if as_json:
+        print(json.dumps({**pooled, "by_fixture": [
+            {"event": f["event"], "windows": r.n, "skill": round(r.skill, 4)}
+            for f, r in results]}, indent=2))
+    else:
+        print(f"{pooled['harness']} over {pooled['fixtures']} fixtures\n")
+        for f, r in results:
+            print(f"  {f['event']:32} {r.n:>3} windows  skill {r.skill:>+7.1%}")
+        print(f"\n  pooled skill {pooled['skill']:+.1%} over {pooled['windows']} "
+              f"windows ({unmeasurable} unmeasurable, {pooled['echoed']} echoed "
+              f"the mid), ${pooled['cost_usd']:.4f}")
+    return 0
+
+
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--league", default="EPL")
-    ap.add_argument("--game", required=True, help="the fixture feed's event id")
+    ap.add_argument("--game", help="the fixture feed's event id")
+    ap.add_argument("--suite", action="store_true",
+                    help="run the fixed benchmark set in benchmark.json")
     ap.add_argument("--tickers", default="",
                     help="comma separated; defaults to the match-winner ladder")
     ap.add_argument("--spec", default="", help="a harness as JSON; omit for the base one")
@@ -162,6 +216,14 @@ async def main() -> int:
     ap.add_argument("--horizon", type=int, default=HORIZON_MINUTES)
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
+
+    spec_for_suite = (json.loads(Path(args.spec).expanduser().read_text())
+                      if args.spec else default_spec())
+    if args.suite:
+        return await run_suite(spec_for_suite, args.every, args.horizon, args.json)
+    if not args.game:
+        print(json.dumps({"error": "pass --game, or --suite for the fixed set"}))
+        return 1
 
     line = timeline(args.league, args.game)
     if line is None:
