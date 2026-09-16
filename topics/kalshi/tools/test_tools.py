@@ -58,6 +58,34 @@ def test_every_tool_declares_itself(cls: type[Tool]) -> None:
 
 
 @pytest.mark.parametrize("cls", REGISTRY, ids=lambda c: c.name)
+def test_a_tool_that_takes_arguments_says_which(cls: type[Tool]) -> None:
+    """An empty schema is valid JSON and a lie about every tool here but one.
+
+    When the declared Tool class replaced the decorator, the base read
+    `parameters` and all forty tools declared `input_schema`. Nothing failed:
+    the schema was still a well-formed object, just with no properties in it, so
+    every tool told the model it took no arguments. A model picking its own
+    calls would have had nothing to fill in, and the only tool for which that is
+    true is the one that really takes none.
+    """
+    tool = cls()
+    properties = json.loads(tool.get_tool_input_schema()).get("properties", {})
+    if tool.name == "active_leagues":
+        assert not properties, "this one genuinely takes no arguments"
+    else:
+        assert properties, f"{tool.name} reports taking no arguments"
+
+
+@pytest.mark.parametrize("cls", REGISTRY, ids=lambda c: c.name)
+def test_the_schema_the_model_sees_is_the_one_declared(cls: type[Tool]) -> None:
+    """`to_openai_schema` is what actually reaches the model, and it read the
+    same wrong attribute."""
+    tool = cls()
+    sent = tool.to_openai_schema()["function"]["parameters"]
+    assert sent == json.loads(tool.get_tool_input_schema())
+
+
+@pytest.mark.parametrize("cls", REGISTRY, ids=lambda c: c.name)
 def test_schemas_are_valid_json_schema_objects(cls: type[Tool]) -> None:
     tool = cls()
     for raw in (tool.get_tool_input_schema(), tool.get_tool_output_schema()):
