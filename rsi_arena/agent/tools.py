@@ -142,7 +142,14 @@ class Tool:
 
     #: JSON Schema for the argument object. An empty properties block means the
     #: tool takes no arguments, which is not the same as taking anything.
+    #:
+    #: ``input_schema`` is accepted as a synonym and every Kalshi tool uses it.
+    #: When this class replaced the decorator the two names diverged and nothing
+    #: noticed: all forty tools declared ``input_schema``, the base class read
+    #: ``parameters``, and every one of them reported taking no arguments at all.
+    #: A model choosing its own calls would have had nothing to fill in.
     parameters: dict[str, Any] = {"type": "object", "properties": {}}
+    input_schema: dict[str, Any] | None = None
 
     #: JSON Schema for :attr:`ToolOutput.raw_output`. Worth writing when a
     #: harness is expected to read particular fields back out.
@@ -165,8 +172,14 @@ class Tool:
 
     # ---------- reading it ----------
 
+    @property
+    def _arguments(self) -> dict[str, Any]:
+        """Whichever of the two names this subclass declared."""
+        declared = type(self).__dict__.get("input_schema") or self.input_schema
+        return declared if declared is not None else self.parameters
+
     def get_tool_input_schema(self) -> str:
-        return json.dumps(self.parameters)
+        return json.dumps(self._arguments)
 
     def get_tool_output_schema(self) -> str:
         return json.dumps(self.output_schema)
@@ -183,7 +196,7 @@ class Tool:
             "function": {
                 "name": self.name,
                 "description": self.described(),
-                "parameters": self.parameters,
+                "parameters": self._arguments,
             },
         }
 
