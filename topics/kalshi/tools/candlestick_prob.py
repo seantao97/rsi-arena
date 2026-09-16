@@ -50,7 +50,8 @@ class CandlestickProbTool(Tool):
 
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         event = input["event_ticker"]
-        markets = [m for m in DISCOVERY.markets(event_ticker=event)
+        # Any state, so a finished fixture can still be read back.
+        markets = [m for m in DISCOVERY.markets(event_ticker=event, status=None)
                    if m.yes_bid and m.yes_ask]
         if len(markets) < 2:
             return ToolOutput.failed(f"{event} has fewer than two quoted outcomes")

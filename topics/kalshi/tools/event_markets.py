@@ -45,7 +45,10 @@ class EventMarketsTool(Tool):
 
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         event = input["event_ticker"]
-        markets = list(DISCOVERY.markets(event_ticker=event))
+        # Every state, not just open. A fixture that has been played has
+        # `finalized` markets, and asking only for open ones answered "no
+        # markets" on every settled event — which is all of them, eventually.
+        markets = list(DISCOVERY.markets(event_ticker=event, status=None))
         if not markets:
             return ToolOutput.failed(f"no markets on {event}")
         rows = [{"ticker": m.ticker, "subtitle": m.subtitle, "type": m.market_type,

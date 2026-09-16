@@ -161,6 +161,23 @@ class Tool:
 
     # ---------- what a subclass provides ----------
 
+    def answer(self, input: dict[str, Any]) -> ToolOutput:
+        """:meth:`get_tool_output` with the same net ``__call__`` puts under it.
+
+        A missing argument and a dropped connection are both things a caller can
+        read and act on; both used to arrive as exceptions. `__call__` has always
+        caught them, but a plan reaches `get_tool_output` directly and got
+        nothing — so a network blip during a scheduled run handed the model a
+        stack trace instead of a sentence.
+        """
+        gap = self.missing(input)
+        if gap:
+            return ToolOutput.failed(gap)
+        try:
+            return self.get_tool_output(input)
+        except Exception as exc:  # noqa: BLE001 - a tool's failure is information
+            return ToolOutput.failed(f"{type(exc).__name__}: {exc}")
+
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
         """Answer, synchronously.
 
@@ -202,6 +219,27 @@ class Tool:
 
     # ---------- running it ----------
 
+    @staticmethod
+    def _run_sync(coro: Any) -> Any:
+        """Drive a coroutine from synchronous code.
+
+        A tool whose body is genuinely async — one that makes an HTTP call —
+        used to raise NotImplementedError from `get_tool_output`, so a
+        synchronous caller got a crash instead of an answer. `web_research` and
+        `team_news` both did, and both are reachable from a plan.
+
+        Inside a running loop the work goes to a thread with its own, because
+        `asyncio.run` refuses to nest.
+        """
+        import concurrent.futures
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
+
     async def aget_tool_output(self, input: dict[str, Any] | None = None,
                                **kwargs: Any) -> ToolOutput:
         """:meth:`get_tool_output`, off the event loop.
@@ -240,7 +278,25 @@ class Tool:
                 span.error = out.error
             return out
 
+    def missing(self, args: dict[str, Any]) -> str:
+        """The required arguments this call left out, as a sentence, or ``""``.
+
+        Checked before the body runs, because leaving one out is the commonest
+        thing a model gets wrong and a `KeyError` is the least useful thing to
+        tell it. Twenty-three of forty tools raised one; a model can act on
+        "needs league, game_id" and cannot act on a stack trace.
+        """
+        required = self._arguments.get("required") or []
+        absent = [name for name in required if args.get(name) is None]
+        if not absent:
+            return ""
+        return (f"{self.name} needs {', '.join(absent)}"
+                + (f"; got {', '.join(sorted(args))}" if args else " and got nothing"))
+
     async def _invoke(self, args: dict[str, Any]) -> ToolOutput:
+        gap = self.missing(args)
+        if gap:
+            return ToolOutput.failed(gap)
         try:
             answer = await self.aget_tool_output(args)
         except Exception as exc:  # noqa: BLE001 - surfaced to the model, not raised

@@ -416,3 +416,49 @@ def test_a_market_with_no_bars_refuses_instead_of_raising() -> None:
                minutes_back=30)
     assert not out.ok
     assert out.response.startswith("unavailable:")
+
+
+# --- every tool answers, or refuses readably ---------------------------------
+
+
+@pytest.mark.parametrize("cls", REGISTRY, ids=lambda c: c.name)
+def test_a_tool_never_raises_at_its_synchronous_door(cls: type[Tool]) -> None:
+    """A tool that cannot answer must say so, not crash.
+
+    `web_research` and `team_news` have asynchronous bodies and their
+    `get_tool_output` raised NotImplementedError, so any caller not already in
+    an event loop got a traceback instead of a sentence — and a plan is one of
+    those callers. A model can read "search is not configured" and try something
+    else; it cannot read a stack trace.
+
+    Called with no arguments on purpose: a missing required argument is the
+    commonest thing a model gets wrong, and that too should be a refusal. The
+    network is cut first, so this stays offline and fast — what is under test is
+    the shape of the failure, not what any endpoint says today.
+    """
+    import socket
+
+    def blocked(*_a, **_k):
+        raise OSError("network blocked for this test")
+
+    original = socket.socket.connect
+    socket.socket.connect = blocked
+    tool = cls()
+    try:
+        out = tool.answer({})
+    except Exception as exc:  # noqa: BLE001 — the thing under test
+        raise AssertionError(f"{cls.name} raised {type(exc).__name__}: {exc}") from None
+    finally:
+        socket.socket.connect = original
+    assert isinstance(out, ToolOutput)
+    assert out.ok or out.response, "a refusal has to say something"
+
+
+def test_a_settled_fixture_still_has_markets() -> None:
+    """`Discovery.markets` defaulted to `status="open"`, and a played fixture's
+    markets are `finalized`. Every tool that went through it answered "no
+    markets" on every settled event — and settled events are the entire
+    benchmark."""
+    out = call("event_markets", event_ticker=SETTLED_EVENT)
+    assert out.ok, out.response
+    assert out.raw_output["markets"], "a match that was played had a book"

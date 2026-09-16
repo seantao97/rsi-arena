@@ -62,7 +62,12 @@ class TeamNewsTool(Tool):
     cost_usd = 0.005
 
     def get_tool_output(self, input: dict[str, Any]) -> ToolOutput:
-        raise NotImplementedError("team_news answers through aget_tool_output")
+        """The synchronous door onto an asynchronous body.
+
+        This used to raise, which made the tool unusable from any caller that
+        was not already in an event loop — and a plan is one of those.
+        """
+        return self._run_sync(self.aget_tool_output(input))
 
     async def aget_tool_output(self, input: dict[str, Any] | None = None,
                                **kwargs: Any) -> ToolOutput:

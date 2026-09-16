@@ -70,7 +70,9 @@ class SettlementCountdownTool(Tool):
                        if series.endswith(suffix)), None)
 
         close_raw, minutes = None, None
-        for ref in DISCOVERY.markets(event_ticker=ticker.rsplit("-", 1)[0]):
+        # Any state: a settled contract still has a close time worth reporting.
+        for ref in DISCOVERY.markets(event_ticker=ticker.rsplit("-", 1)[0],
+                                     status=None):
             if ref.ticker == ticker and ref.close_time:
                 close_raw = ref.close_time
                 try:

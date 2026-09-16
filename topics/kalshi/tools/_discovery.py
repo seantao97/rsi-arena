@@ -140,12 +140,25 @@ class Discovery:
         self,
         series_ticker: str | None = None,
         event_ticker: str | None = None,
-        status: str = "open",
+        status: str | None = "open",
         max_items: int | None = None,
     ) -> Iterator[MarketRef]:
-        """Markets, classified. Filter server-side where possible."""
-        params = {"status": status, "series_ticker": series_ticker,
-                  "event_ticker": event_ticker}
+        """Markets, classified. Filter server-side where possible.
+
+        ``status=None`` asks for every market whatever its state, which is what
+        a caller wants of a fixture that has already been played. The default of
+        ``"open"`` quietly returned nothing for those — a finished match's
+        markets are ``finalized``, not open — so every tool that came through
+        here reported no markets on any settled event. The whole benchmark is
+        settled events.
+
+        The API rejects an empty string, so the parameter is dropped rather than
+        blanked.
+        """
+        params: dict[str, Any] = {"series_ticker": series_ticker,
+                                  "event_ticker": event_ticker}
+        if status:
+            params["status"] = status
         catalog = self.all_series()
         for m in self.client.paginate("/markets", "markets", params,
                                       max_items=max_items):
